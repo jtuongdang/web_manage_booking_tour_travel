@@ -12,7 +12,7 @@ using QuanLyTourDuLich.Api.Models.Entities;
 namespace QuanLyTourDuLich.Api.Modules.Identity;
 
 [ApiController]
-[Authorize(Policy = PolicyNames.RequireAdmin)]
+[Authorize]
 [Route("api/v1/users")]
 public sealed class UsersController(
     AppDbContext db,
@@ -20,7 +20,24 @@ public sealed class UsersController(
     IAuditLogService auditLog,
     ICurrentUserService currentUser) : ControllerBase
 {
+    [HttpGet("guides")]
+    [Authorize(Policy = PolicyNames.RequireOperatorOrAdmin)]
+    public async Task<ActionResult<IReadOnlyList<GuideLookupItem>>> ListGuides(CancellationToken cancellationToken)
+    {
+        var guides = await (
+            from user in db.Users.AsNoTracking()
+            join userRole in db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
+            join role in db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
+            where user.IsActive && role.Code == RoleCodes.Guide
+            orderby user.FullName, user.Id
+            select new GuideLookupItem(user.Id, user.Username, user.FullName))
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return Ok(guides);
+    }
+
     [HttpGet]
+    [Authorize(Policy = PolicyNames.RequireAdmin)]
     public async Task<ActionResult<PagedResult<UserListItem>>> List(
         [FromQuery] PagedRequest request,
         CancellationToken cancellationToken)
@@ -61,6 +78,7 @@ public sealed class UsersController(
     }
 
     [HttpPost("staff")]
+    [Authorize(Policy = PolicyNames.RequireAdmin)]
     public async Task<ActionResult<UserListItem>> CreateStaff(CreateStaffRequest request, CancellationToken cancellationToken)
     {
         var roleCode = request.RoleCode.Trim().ToUpperInvariant();
@@ -120,6 +138,7 @@ public sealed class UsersController(
     }
 
     [HttpPatch("{id:int}/status")]
+    [Authorize(Policy = PolicyNames.RequireAdmin)]
     public async Task<IActionResult> SetStatus(int id, SetUserStatusRequest request, CancellationToken cancellationToken)
     {
         var user = await db.Users.SingleOrDefaultAsync(u => u.Id == id, cancellationToken)
@@ -146,6 +165,7 @@ public sealed class UsersController(
     }
 
     [HttpPut("{id:int}/role")]
+    [Authorize(Policy = PolicyNames.RequireAdmin)]
     public async Task<IActionResult> SetRole(int id, SetUserRoleRequest request, CancellationToken cancellationToken)
     {
         var roleCode = request.RoleCode.Trim().ToUpperInvariant();
@@ -188,6 +208,7 @@ public sealed class UsersController(
     }
 }
 
+public sealed record GuideLookupItem(int Id, string Username, string FullName);
 public sealed record CreateStaffRequest(string Username, string Email, string? Phone, string FullName, string Password, string RoleCode);
 public sealed record SetUserStatusRequest(bool IsActive);
 public sealed record SetUserRoleRequest(string RoleCode);
