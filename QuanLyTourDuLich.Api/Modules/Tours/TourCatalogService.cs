@@ -73,9 +73,27 @@ public sealed class TourCatalogService(AppDbContext db)
         var images = await db.TourImages.AsNoTracking().Where(x => x.TourId == tour.Id).OrderBy(x => x.SortOrder).ToListAsync(ct);
         var departures = await db.TourDepartures.AsNoTracking().Where(x => x.TourId == tour.Id && x.DepartureDate >= DateOnly.FromDateTime(DateTime.UtcNow) && (canSeeInternal || (x.IsPublic && x.Status != "Cancelled")))
             .OrderBy(x => x.DepartureDate).Take(20).ToListAsync(ct);
-        var reviews = await db.TourReviews.AsNoTracking().Where(x => x.TourId == tour.Id && !x.IsHidden)
-            .GroupBy(_ => 1).Select(g => new { Count = g.Count(), Average = g.Average(x => (double)x.OverallRating) }).FirstOrDefaultAsync(ct);
-        var summary = new { reviewCount = reviews?.Count ?? 0, averageRating = reviews?.Average ?? 0d };
-        return new TourDetail(tour, itineraries, images, new CancellationPolicyDetail(policy, rules), departures, summary);
+        var totalVisible = await db.TourReviews.AsNoTracking().CountAsync(x => x.TourId == tour.Id && !x.IsHidden, ct);
+        var reviewList = await (
+            from r in db.TourReviews.AsNoTracking()
+            join c in db.Customers.AsNoTracking() on r.CustomerId equals c.Id
+            where r.TourId == tour.Id && !r.IsHidden
+            orderby r.CreatedAt descending
+            select new TourReviewItem(r.Id, c.FullName, r.OverallRating, r.GuideRating, r.ItineraryRating,
+                r.HotelFoodRating, r.TransportRating, r.Comment, r.StaffReply, r.RepliedAt, r.CreatedAt)
+        ).Take(30).ToListAsync(ct);
+        var reviewCount = totalVisible > 0 ? totalVisible : tour.ReviewCount;
+        var avg = reviewList.Count > 0 ? Math.Round(reviewList.Average(x => (double)x.OverallRating), 2) : (double)tour.AverageRating;
+        static double? Avg(IEnumerable<byte?> vals) { var arr = vals.Where(v => v.HasValue).Select(v => (double)v!.Value).ToArray(); return arr.Length > 0 ? Math.Round(arr.Average(), 1) : null; }
+        var summary = new
+        {
+            reviewCount,
+            averageRating = avg,
+            guideAverage = Avg(reviewList.Select(x => x.GuideRating)),
+            itineraryAverage = Avg(reviewList.Select(x => x.ItineraryRating)),
+            hotelFoodAverage = Avg(reviewList.Select(x => x.HotelFoodRating)),
+            transportAverage = Avg(reviewList.Select(x => x.TransportRating)),
+        };
+        return new TourDetail(tour, itineraries, images, new CancellationPolicyDetail(policy, rules), departures, summary, reviewList);
     }
 }

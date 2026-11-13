@@ -68,11 +68,21 @@ export function toTourDetail(result) {
       description: item.description,
     })),
     departures,
+    bookedCount: Number(source.bookedCountTotal ?? source.bookedCount ?? 0),
     childPercent: Number(source.childPricePercent ?? 75),
     infantPrice: Number(source.infantPrice ?? 0),
     singleSupplement: Number(source.singleSupplement ?? 0),
     freeCancelDays: Number(result.cancellationPolicy?.rules?.[0]?.minDaysBeforeDeparture ?? 0),
-    reviews: [],
+    reviewBreakdown: result.reviewsSummary ?? null,
+    reviews: (result.reviews ?? []).map((item) => ({
+      id: item.id,
+      name: item.customerName || 'Khách VietTour',
+      rating: Number(item.overallRating ?? 5),
+      content: item.comment,
+      reply: item.staffReply,
+      verified: true,
+      date: item.createdAt ? new Date(item.createdAt).toLocaleDateString('vi-VN') : '',
+    })),
     policy: result.cancellationPolicy,
   };
 }

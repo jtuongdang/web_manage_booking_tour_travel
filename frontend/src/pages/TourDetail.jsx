@@ -73,7 +73,7 @@ export default function TourDetail() {
       </div>
 
       <div className="gallery">
-        {tour.images.map((src, i) => <img key={src} src={src} alt={`${tour.title} - ảnh ${i + 1}`} loading={i ? 'lazy' : 'eager'} />)}
+        {tour.images.map((src, i) => <img key={`${src}-${i}`} src={src} alt={`${tour.title} - ảnh ${i + 1}`} loading={i ? 'lazy' : 'eager'} />)}
       </div>
 
       <div className="detail-layout">
@@ -157,7 +157,12 @@ export default function TourDetail() {
             <div className="review-summary">
               <div className="big-score">{tour.rating}<span>/5</span></div>
               <div>
-                {[['Hướng dẫn viên', 4.9], ['Lịch trình', 4.8], ['Khách sạn & ăn uống', 4.6], ['Phương tiện', 4.7]].map(([l, v]) => (
+                {[
+                  ['Hướng dẫn viên', tour.reviewBreakdown?.guideAverage],
+                  ['Lịch trình', tour.reviewBreakdown?.itineraryAverage],
+                  ['Khách sạn & ăn uống', tour.reviewBreakdown?.hotelFoodAverage],
+                  ['Phương tiện', tour.reviewBreakdown?.transportAverage],
+                ].filter(([, v]) => v != null).map(([l, v]) => (
                   <div key={l} className="bar-row"><span>{l}</span><meter min="0" max="5" value={v} /><b>{v}</b></div>
                 ))}
               </div>
@@ -168,7 +173,7 @@ export default function TourDetail() {
                   <div className="avatar">{r.name.split(' ').pop()[0]}</div>
                   <div>
                     <b>{r.name}</b> {r.verified && <span className="verified"><CircleCheck size={12} /> Đã đi tour</span>}
-                    <div className="muted small">{r.type} · {r.date}</div>
+                    <div className="muted small">{r.date}</div>
                   </div>
                   <div className="stars" aria-label={`${r.rating} sao`}>{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}</div>
                 </div>

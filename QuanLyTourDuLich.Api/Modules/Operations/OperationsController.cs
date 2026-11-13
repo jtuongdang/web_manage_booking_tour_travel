@@ -13,6 +13,20 @@ namespace QuanLyTourDuLich.Api.Modules.Operations;
 [ApiController, Authorize, Route("api/v1")]
 public sealed class OperationsController(AppDbContext db, ICurrentUserService current, IAuditLogService audit, IFinancialLedgerWriter ledger) : ControllerBase
 {
+    [HttpGet("operations/departures/{id:int}/guides"), Authorize(Roles=RoleCodes.Operator+","+RoleCodes.Guide+","+RoleCodes.Admin)]
+    public async Task<IActionResult> Guides(int id, CancellationToken ct)
+    {
+        _ = await Departure(id, ct);
+        var rows = await (
+            from dg in db.DepartureGuides.AsNoTracking()
+            join u in db.Users.AsNoTracking() on dg.GuideUserId equals u.Id
+            where dg.DepartureId == id
+            orderby dg.GuideRole, u.FullName
+            select new { dg.Id, dg.DepartureId, dg.GuideUserId, dg.GuideRole, dg.Notes, dg.AssignedAt, u.FullName, u.Phone, u.Email }
+        ).ToListAsync(ct);
+        return Ok(rows);
+    }
+
     [HttpPut("operations/departures/{id:int}/guides"), Authorize(Roles=RoleCodes.Operator+","+RoleCodes.Admin)]
     public async Task<IActionResult> AssignGuides(int id, GuideAssignmentRequest r, CancellationToken ct)
     {
@@ -35,8 +49,27 @@ public sealed class OperationsController(AppDbContext db, ICurrentUserService cu
     [HttpPatch("operations/departures/{id:int}/checklists/{checklistId:int}"), Authorize(Roles=RoleCodes.Operator+","+RoleCodes.Guide+","+RoleCodes.Admin)]
     public async Task<IActionResult> UpdateChecklist(int id,int checklistId,ChecklistUpdateRequest r,CancellationToken ct){var d=await Departure(id,ct);EnsureNotSettled(d);var e=await db.DepartureChecklists.SingleOrDefaultAsync(x=>x.Id==checklistId&&x.DepartureId==id,ct)??throw new NotFoundException("Không tìm thấy checklist.");var old=e.IsCompleted;e.IsCompleted=r.IsCompleted;e.Notes=r.Notes;e.CompletedByUserId=r.IsCompleted?current.UserId:null;e.CompletedAt=r.IsCompleted?DateTime.UtcNow:null;await db.SaveChangesAsync(ct);await audit.WriteAsync("UpdateChecklist","DepartureChecklists",e.Id.ToString(),oldValue:new{IsCompleted=old},newValue:e,cancellationToken:ct);return Ok(e);}
 
+    [HttpGet("operations/departures/{id:int}/passengers"), Authorize(Roles=RoleCodes.Operator+","+RoleCodes.Guide+","+RoleCodes.Admin)]
+    public async Task<IActionResult> Passengers(int id, CancellationToken ct)
+    {
+        _ = await Departure(id, ct);
+        var rows = await (
+            from p in db.BookingPassengers.AsNoTracking()
+            join b in db.Bookings.AsNoTracking() on p.BookingId equals b.Id
+            where b.DepartureId == id && b.Status != "Cancelled" && b.Status != "Expired"
+            orderby b.BookingCode, p.Id
+            select new
+            {
+                p.Id, p.BookingId, b.BookingCode, BookingStatus = b.Status, b.ContactName, b.ContactPhone,
+                p.PaxType, p.FullName, p.Gender, p.DateOfBirth, p.IdentityNumber, p.PassportExpiryDate,
+                p.Nationality, p.SpecialRequest, p.CheckInStatus, p.CheckedInAt, p.CheckedInByUserId
+            }
+        ).ToListAsync(ct);
+        return Ok(rows);
+    }
+
     [HttpPatch("operations/passengers/{id:long}/checkin"), Authorize(Roles=RoleCodes.Guide+","+RoleCodes.Operator+","+RoleCodes.Admin)]
-    public async Task<IActionResult> Checkin(long id,CheckinRequest r,CancellationToken ct){if(r.Status is not("Pending" or "CheckedIn" or "Late" or "NoShow"))throw new BadRequestException("CheckInStatus không hợp lệ.");var p=await db.BookingPassengers.SingleOrDefaultAsync(x=>x.Id==id,ct)??throw new NotFoundException("Không tìm thấy hành khách.");var b=await db.Bookings.SingleAsync(x=>x.Id==p.BookingId,ct);var d=await Departure(b.DepartureId,ct);EnsureNotSettled(d);var old=p.CheckInStatus;p.CheckInStatus=r.Status;p.CheckedInAt=r.Status=="Pending"?null:DateTime.UtcNow;p.CheckedInByUserId=r.Status=="Pending"?null:current.UserId;await db.SaveChangesAsync(ct);await audit.WriteAsync("PassengerCheckin","BookingPassengers",id.ToString(),oldValue:new{Status=old},newValue:new{Status=p.CheckInStatus},cancellationToken:ct);return Ok(p);}
+    public async Task<IActionResult> Checkin(long id,CheckinRequest r,CancellationToken ct){if(r.Status is not("Pending" or "CheckedIn" or "Late" or "NoShow"))throw new BadRequestException("CheckInStatus không hợp lệ.");var p=await db.BookingPassengers.SingleOrDefaultAsync(x=>x.Id==id,ct)??throw new NotFoundException("Không tìm thấy hành khách.");var b=await db.Bookings.SingleAsync(x=>x.Id==p.BookingId,ct);if(b.Status is "Cancelled" or "Expired")throw new ConflictException("Không thể check-in hành khách của booking đã hủy hoặc hết hạn.");var d=await Departure(b.DepartureId,ct);EnsureNotSettled(d);var old=p.CheckInStatus;p.CheckInStatus=r.Status;p.CheckedInAt=r.Status=="Pending"?null:DateTime.UtcNow;p.CheckedInByUserId=r.Status=="Pending"?null:current.UserId;p.UpdatedAt=DateTime.UtcNow;await db.SaveChangesAsync(ct);await audit.WriteAsync("PassengerCheckin","BookingPassengers",id.ToString(),oldValue:new{Status=old},newValue:new{Status=p.CheckInStatus},cancellationToken:ct);return Ok(p);}
 
     [HttpGet("operations/departures/{id:int}/incidents"), Authorize(Roles=RoleCodes.Operator+","+RoleCodes.Guide+","+RoleCodes.Admin)]
     public async Task<IActionResult> Incidents(int id,CancellationToken ct){_=await Departure(id,ct);return Ok(await db.TourIncidents.AsNoTracking().Where(x=>x.DepartureId==id).OrderByDescending(x=>x.OccurredAt).ToListAsync(ct));}

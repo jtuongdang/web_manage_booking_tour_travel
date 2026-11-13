@@ -119,6 +119,13 @@ public sealed class BookingService(
                 p.IdentityNumber, p.PassportExpiryDate, p.Nationality, p.SpecialRequest, p.CheckInStatus, p.CheckedInAt))
             .ToListAsync(ct);
 
+        var payments = await db.PaymentTransactions.AsNoTracking()
+            .Where(x => x.BookingId == booking.Id)
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(p => new BookingPaymentDto(p.Id, p.TransactionCode, p.Method, p.ExpectedAmount,
+                p.ActualReceivedAmount, p.Status, p.ReconciliationStatus, p.PaidAt, p.CreatedAt))
+            .ToListAsync(ct);
+
         var seats = BookingStateRules.SeatsCount(booking.AdultCount, booking.ChildCount);
         var remaining = Math.Max(0m, booking.TotalAmount - booking.PaidAmount);
         return new BookingDetailsDto(
@@ -135,7 +142,7 @@ public sealed class BookingService(
             booking.HoldExpiresAt, booking.FinalPaymentDueAt, booking.CancellationReason,
             booking.CancelPenaltyPercent, booking.CancelPenaltyAmount, booking.CancelledAt,
             booking.CreatedAt, booking.UpdatedAt, meta?.Title ?? "", meta?.Code ?? "",
-            meta?.DepartureCode ?? "", meta?.DepartureDate ?? default, passengers);
+            meta?.DepartureCode ?? "", meta?.DepartureDate ?? default, passengers, payments);
     }
 
     public async Task AdjustAsync(long id, AdjustPaxRequest r, CancellationToken ct)

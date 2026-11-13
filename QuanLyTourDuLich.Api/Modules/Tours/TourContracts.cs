@@ -15,9 +15,13 @@ public sealed record TourListItem(int Id, string Code, string Slug, string Title
     DateOnly? NextDepartureDate, int? AvailableSlots,
     decimal? OriginalPrice = null, string? Transport = null, string? Badges = null, string? CoverImageUrl = null, int? NextDepartureId = null);
 
+public sealed record TourReviewItem(long Id, string CustomerName, byte OverallRating, byte? GuideRating,
+    byte? ItineraryRating, byte? HotelFoodRating, byte? TransportRating, string Comment, string? StaffReply,
+    DateTime? RepliedAt, DateTime CreatedAt);
+
 public sealed record TourDetail(QuanLyTourDuLich.Api.Models.Entities.Tours Tour, IReadOnlyList<TourItineraries> Itineraries,
     IReadOnlyList<TourImages> Images, CancellationPolicyDetail CancellationPolicy,
-    IReadOnlyList<TourDepartures> UpcomingDepartures, object ReviewsSummary);
+    IReadOnlyList<TourDepartures> UpcomingDepartures, object ReviewsSummary, IReadOnlyList<TourReviewItem>? Reviews = null);
 
 public sealed record CancellationPolicyDetail(CancellationPolicies Policy, IReadOnlyList<CancellationPolicyRules> Rules);
 

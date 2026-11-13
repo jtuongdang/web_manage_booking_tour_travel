@@ -40,6 +40,17 @@ public sealed record PassengerDto(
     string CheckInStatus,
     DateTime? CheckedInAt);
 
+public sealed record BookingPaymentDto(
+    long Id,
+    string TransactionCode,
+    string Method,
+    decimal ExpectedAmount,
+    decimal ActualReceivedAmount,
+    string Status,
+    string ReconciliationStatus,
+    DateTime? PaidAt,
+    DateTime CreatedAt);
+
 public sealed record BookingListItemDto(
     long Id,
     string BookingCode,
@@ -135,4 +146,5 @@ public sealed record BookingDetailsDto(
     string TourCode,
     string DepartureCode,
     DateOnly DepartureDate,
-    IReadOnlyList<PassengerDto> Passengers);
+    IReadOnlyList<PassengerDto> Passengers,
+    IReadOnlyList<BookingPaymentDto> Payments);

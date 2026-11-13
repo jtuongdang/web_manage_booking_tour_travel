@@ -74,7 +74,7 @@ export default function Checkout() {
 
   const estimate = calcPrice({ tour, departure: dep, adults, children, infants, singleRooms });
   const price = { ...estimate, discount: discountAmount, total: Math.max(0, estimate.total - discountAmount) };
-  price.deposit = Math.round((price.total * DEPOSIT_PERCENT) / 100 / 1000) * 1000;
+  price.deposit = Math.round((price.total * DEPOSIT_PERCENT) / 100);
   price.amountBeforeTax = price.total / 1.08;
   price.vatAmount = price.total - price.amountBeforeTax;
   const payNow = payOption === 'deposit' ? price.deposit : price.total;
@@ -118,13 +118,6 @@ export default function Checkout() {
       return;
     }
     const fd = new FormData(e.currentTarget);
-    const contactEmail = String(fd.get('contactEmail') ?? '').trim();
-    const contactPhone = String(fd.get('contactPhone') ?? '').trim();
-    if (contactEmail.toLowerCase() !== auth.user.email.toLowerCase() ||
-      (auth.user.phone && contactPhone !== auth.user.phone)) {
-      setError('Email và số điện thoại đặt tour phải trùng với thông tin tài khoản để liên kết booking.');
-      return;
-    }
     const passengers = paxList.map((p) => ({
       paxType: p.key.startsWith('a') ? 'Adult' : p.key.startsWith('c') ? 'Child' : 'Infant',
       fullName: fd.get(`${p.key}-name`),
@@ -150,13 +143,12 @@ export default function Checkout() {
         promoCode: promoCode || null,
         payOption: payOption === 'deposit' ? 'Deposit' : 'Full',
         requireVatInvoice: wantInvoice,
+        invoiceCompanyName: wantInvoice ? (fd.get('invCompany') || null) : null,
+        invoiceTaxCode: wantInvoice ? (fd.get('invTax') || null) : null,
+        invoiceAddress: wantInvoice ? (fd.get('invAddress') || null) : null,
+        invoiceEmail: wantInvoice ? (fd.get('invEmail') || fd.get('contactEmail') || null) : null,
+        passengers,
       });
-      try {
-        await bookingsApi.updatePassengers(booking.id, passengers);
-      } catch (passengerError) {
-        setError(`Đã tạo đơn ${booking.bookingCode}, nhưng không lưu được danh sách hành khách: ${passengerError.message}. Mã đơn đã được giữ; vui lòng kiểm tra đơn trước khi thanh toán.`);
-        return;
-      }
       navigate(`/payment/${booking.bookingCode}`);
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : 'Không thể tạo đơn đặt tour.');
@@ -220,7 +212,14 @@ export default function Checkout() {
 
           <section className="card">
             <label className="check"><input type="checkbox" checked={wantInvoice} onChange={(e) => setWantInvoice(e.target.checked)} /> <FileText size={16} /> Yêu cầu xuất hóa đơn VAT mô phỏng</label>
-            {wantInvoice && <p className="muted small">Theo hợp đồng API hiện tại, hóa đơn dùng thông tin liên hệ của đơn đặt tour.</p>}
+            {wantInvoice && (
+              <div className="grid-2" style={{ marginTop: 12 }}>
+                <Field id="invCompany" name="invCompany" label="Tên công ty / Đơn vị" required error="Nhập tên đơn vị xuất hóa đơn." />
+                <Field id="invTax" name="invTax" label="Mã số thuế" required error="Nhập mã số thuế." />
+                <Field id="invAddress" name="invAddress" label="Địa chỉ xuất hóa đơn" required error="Nhập địa chỉ công ty." />
+                <Field id="invEmail" name="invEmail" label="Email nhận hóa đơn" type="email" defaultValue={auth.user?.email ?? ''} />
+              </div>
+            )}
           </section>
         </div>
 

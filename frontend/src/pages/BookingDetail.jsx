@@ -200,7 +200,7 @@ export default function BookingDetail() {
                   <tbody>{passengers.map((p, index) => <tr key={p.id ?? index}><td>{index + 1}</td><td>{p.fullName}</td><td>{p.paxType}</td><td>{p.gender || '—'}</td><td>{p.dateOfBirth ? fmtDate(p.dateOfBirth) : '—'}</td><td>{p.identityNumber ? `•••${p.identityNumber.slice(-4)}` : '—'}</td></tr>)}</tbody>
                 </table>
               </div>
-            ) : <p className="muted">Backend hiện chưa cung cấp endpoint đọc danh sách hành khách cho đơn này.</p>}
+            ) : <p className="muted">Chưa cập nhật danh sách hành khách.</p>}
             <p className="muted small">Liên hệ: {b.contact.name} · {b.contact.phone} · {b.contact.email}{b.contact.note ? ` · Ghi chú: ${b.contact.note}` : ''}</p>
           </section>
 
@@ -208,7 +208,7 @@ export default function BookingDetail() {
             <h3>Lịch sử thanh toán</h3>
             {payments.length ? (
               <ul className="pay-history">{payments.map((payment) => <li key={payment.transactionCode}><CircleCheck size={16} className="green" /> <b>{vnd(payment.actualReceivedAmount)}</b> · Mã GD {payment.transactionCode} · {payment.status}</li>)}</ul>
-            ) : <p className="muted">Backend chưa cung cấp danh sách giao dịch theo booking.</p>}
+            ) : <p className="muted">Chưa có giao dịch thanh toán nào.</p>}
           </section>
 
           {canReschedule && (
@@ -219,7 +219,7 @@ export default function BookingDetail() {
                   <label htmlFor="reschedule-departure">Lịch khởi hành mới</label>
                   <select id="reschedule-departure" value={newDepartureId} onChange={(event) => setNewDepartureId(event.target.value)} required>
                     <option value="">Chọn ngày khởi hành</option>
-                    {departures.filter((item) => item.id !== b.departureId).map((item) => <option key={item.id} value={item.id}>{fmtDate(item.departureDate)} · còn {item.availableSlots} chỗ</option>)}
+                    {departures.filter((item) => item.id !== b.departureId).map((item) => <option key={item.id} value={item.id}>{fmtDate(item.departureDate)} · còn {item.availableSlots ?? item.available} chỗ</option>)}
                   </select>
                 </div>
                 <button className="btn btn-outline" type="submit" disabled={busy || !newDepartureId}>Xác nhận đổi ngày</button>
