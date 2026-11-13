@@ -20,7 +20,8 @@ public sealed class PaymentsController(
     IPaymentGateway gateway,
     IFinancialLedgerWriter ledger,
     ISystemSettingService settings,
-    ICurrentUserService currentUser) : ControllerBase
+    ICurrentUserService currentUser,
+    IHostEnvironment environment) : ControllerBase
 {
     [HttpPost("qr-create")]
     public async Task<IActionResult> CreateQr([FromBody] CreateQrRequest request, CancellationToken ct)
@@ -81,6 +82,39 @@ public sealed class PaymentsController(
         if (!gateway.VerifyWebhookSignature(request.TransactionCode, request.PaidAmount, request.MockSignature))
             throw new UnauthorizedException("Mock webhook signature is invalid.", "invalid_mock_signature");
 
+        return await ProcessWebhookCoreAsync(request, ct);
+    }
+
+    /// <summary>
+    /// Development-only simulator convenience endpoint so Customer/Staff UI demo flows can trigger VietQR callbacks
+    /// without exposing the webhook secret to client code.
+    /// </summary>
+    [HttpPost("qr-simulate-demo")]
+    public async Task<IActionResult> SimulateDemoWebhook([FromBody] SimulateDemoWebhookRequest request, CancellationToken ct)
+    {
+        if (!environment.IsDevelopment())
+            throw new ForbiddenException("Demo simulator endpoint is only available in Development environment.");
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey)) throw new BadRequestException("IdempotencyKey is required.");
+        if (request.Scenario is not null && !new[] { "Success", "Partial", "Overpaid", "Failed" }
+                .Contains(request.Scenario, StringComparer.OrdinalIgnoreCase))
+            throw new BadRequestException("Scenario must be Success, Partial, Overpaid or Failed.");
+
+        var txLookup = await db.PaymentTransactions.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.TransactionCode == request.TransactionCode, ct)
+            ?? throw new NotFoundException("Payment transaction was not found.");
+        var booking = await db.Bookings.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == txLookup.BookingId, ct)
+            ?? throw new NotFoundException("Booking was not found.");
+        EnsureBookingAccess(booking);
+
+        var paidAmount = request.PaidAmount ?? txLookup.ExpectedAmount;
+        var sig = VietQrPaymentGateway.CreateMockSignature(request.TransactionCode, paidAmount);
+        return await ProcessWebhookCoreAsync(new SimulateWebhookRequest(
+            request.TransactionCode, paidAmount, request.Scenario ?? "Success", request.IdempotencyKey, sig), ct);
+    }
+
+    private async Task<IActionResult> ProcessWebhookCoreAsync(SimulateWebhookRequest request, CancellationToken ct)
+    {
         var replay = await db.PaymentTransactions.AsNoTracking()
             .FirstOrDefaultAsync(x => x.IdempotencyKey == request.IdempotencyKey, ct);
         if (replay is not null)
@@ -269,7 +303,7 @@ public sealed class PaymentsController(
             departure.BookedSlots += booking.SeatsReserved;
             if (departure.HeldSlots + departure.BookedSlots > departure.TotalCapacity)
                 throw new ConflictException("Departure capacity would be exceeded.", "overbooking_prevented");
-            if (departure.Status == "Full" && departure.AvailableSlots > 0) departure.Status = "Open";
+            if (departure.Status == "Full" && (departure.TotalCapacity - departure.HeldSlots - departure.BookedSlots) > 0) departure.Status = "Open";
             booking.Status = fullyPaid ? "Confirmed" : booking.PaidAmount >= booking.RequiredDepositAmount ? "DepositPaid" : "PendingPayment";
             var finalDays = await settings.GetIntAsync("FinalPaymentDueDaysBeforeDeparture", 5, ct);
             booking.FinalPaymentDueAt = departure.DepartureDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(-Math.Clamp(finalDays, 0, 365));
@@ -301,13 +335,17 @@ public sealed class PaymentsController(
             throw new ForbiddenException("You cannot access this booking.");
     }
 
-    private static decimal CalculateExpectedAmount(Bookings booking, string mode) => mode switch
+    private static decimal CalculateExpectedAmount(Bookings booking, string mode)
     {
-        "Deposit" => Math.Min(booking.RequiredDepositAmount, booking.RemainingAmount),
-        "Remaining" => booking.RemainingAmount,
-        "Full" => booking.RemainingAmount,
-        _ => throw new BadRequestException("Mode must be Deposit, Remaining or Full.")
-    };
+        var remainingAmount = Math.Max(0m, booking.TotalAmount - booking.PaidAmount);
+        return mode switch
+        {
+            "Deposit" => Math.Min(booking.RequiredDepositAmount, remainingAmount),
+            "Remaining" => remainingAmount,
+            "Full" => remainingAmount,
+            _ => throw new BadRequestException("Mode must be Deposit, Remaining or Full.")
+        };
+    }
 
     private static bool IsUniqueConstraint(DbUpdateException exception) => exception.InnerException?.Message.Contains("2601", StringComparison.Ordinal) == true
         || exception.InnerException?.Message.Contains("2627", StringComparison.Ordinal) == true;
@@ -315,6 +353,7 @@ public sealed class PaymentsController(
 
 public sealed record CreateQrRequest(long? BookingId, string? BookingCode, string Mode);
 public sealed record SimulateWebhookRequest(string TransactionCode, decimal PaidAmount, string? Scenario, string? IdempotencyKey, string? MockSignature);
+public sealed record SimulateDemoWebhookRequest(string TransactionCode, decimal? PaidAmount = null, string? Scenario = "Success", string IdempotencyKey = "");
 public sealed record ManualPaymentRequest(long? BookingId, string? BookingCode, string Method, decimal Amount,
     string? BankCode, string? BankRef, string? EvidenceUrl, string? Note);
 public sealed record ReconcilePaymentRequest(string BankCode, string BankRef, decimal ActualReceivedAmount,
