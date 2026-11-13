@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="QuanLyTourDuLich.Api/QuanLyTourDuLich.Api.csproj" />
+  <Project Path="QuanLyTourDuLich.Tests/QuanLyTourDuLich.Tests.csproj" />
 </Solution>
