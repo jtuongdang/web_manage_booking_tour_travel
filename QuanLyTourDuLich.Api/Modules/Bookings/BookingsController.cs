@@ -15,29 +15,50 @@ namespace QuanLyTourDuLich.Api.Modules.BookingEngine;
 public sealed class BookingsController(AppDbContext db, BookingService bookings, ICurrentUserService current, IAuditLogService audit) : ControllerBase
 {
     [HttpPost, AllowAnonymous]
-    public async Task<ActionResult<Bookings>> Create(CreateBookingRequest request, CancellationToken ct)
+    public async Task<ActionResult<BookingDetailsDto>> Create(CreateBookingRequest request, CancellationToken ct)
     {
-        if (current.IsAuthenticated && !current.Roles.Any(r => r is RoleCodes.Sales or RoleCodes.Admin or RoleCodes.Operator) && request.BookingChannel != "WebB2C")
+        var isWebChannel = string.IsNullOrWhiteSpace(request.BookingChannel)
+            || string.Equals(request.BookingChannel, "WebB2C", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(request.BookingChannel, "Web", StringComparison.OrdinalIgnoreCase);
+        if (current.IsAuthenticated && !current.Roles.Any(r => r is RoleCodes.Sales or RoleCodes.Admin or RoleCodes.Operator) && !isWebChannel)
             throw new ForbiddenException("Only staff may create an assisted booking.");
         var result = await bookings.CreateAsync(request, ct);
-        return CreatedAtAction(nameof(Get), new { codeOrId = result.BookingCode }, result);
+        var details = await bookings.BuildDetailsDtoAsync(result, ct);
+        return CreatedAtAction(nameof(Get), new { codeOrId = result.BookingCode }, details);
     }
 
     [HttpGet("my"), Authorize(Roles = RoleCodes.Customer)]
-    public async Task<ActionResult<IReadOnlyList<Bookings>>> Mine(CancellationToken ct) => Ok(await db.Bookings.AsNoTracking().Where(x => x.CustomerId == current.CustomerId).OrderByDescending(x => x.CreatedAt).ToListAsync(ct));
+    public async Task<ActionResult<IReadOnlyList<BookingListItemDto>>> Mine(CancellationToken ct)
+    {
+        var items = await BuildListQuery()
+            .Where(x => x.Booking.CustomerId == current.CustomerId)
+            .OrderByDescending(x => x.Booking.CreatedAt)
+            .Select(x => ProjectListItem(x.Booking, x.TourTitle, x.TourCode, x.DepartureCode, x.DepartureDate))
+            .ToListAsync(ct);
+        return Ok(items);
+    }
 
     [HttpGet, Authorize(Roles = RoleCodes.Sales + "," + RoleCodes.Operator + "," + RoleCodes.Accountant + "," + RoleCodes.Admin)]
-    public async Task<ActionResult<PagedResult<Bookings>>> List([FromQuery] PagedRequest page, [FromQuery] string? status, CancellationToken ct)
+    public async Task<ActionResult<PagedResult<BookingListItemDto>>> List([FromQuery] PagedRequest page, [FromQuery] string? status, CancellationToken ct)
     {
-        var query = db.Bookings.AsNoTracking().AsQueryable();
-        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status == status);
-        if (!string.IsNullOrWhiteSpace(page.Search)) { var s = page.Search.Trim(); query = query.Where(x => x.BookingCode.Contains(s) || x.ContactName.Contains(s) || x.ContactPhone.Contains(s) || x.ContactEmail.Contains(s)); }
-        var count = await query.CountAsync(ct); var items = await query.OrderByDescending(x => x.CreatedAt).Skip((page.NormalizedPageIndex - 1) * page.NormalizedPageSize).Take(page.NormalizedPageSize).ToListAsync(ct);
-        return Ok(new PagedResult<Bookings>(items, page.NormalizedPageIndex, page.NormalizedPageSize, count));
+        var query = BuildListQuery();
+        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Booking.Status == status);
+        if (!string.IsNullOrWhiteSpace(page.Search))
+        {
+            var s = page.Search.Trim();
+            query = query.Where(x => x.Booking.BookingCode.Contains(s) || x.Booking.ContactName.Contains(s) || x.Booking.ContactPhone.Contains(s) || x.Booking.ContactEmail.Contains(s));
+        }
+        var count = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(x => x.Booking.CreatedAt)
+            .Skip((page.NormalizedPageIndex - 1) * page.NormalizedPageSize)
+            .Take(page.NormalizedPageSize)
+            .Select(x => ProjectListItem(x.Booking, x.TourTitle, x.TourCode, x.DepartureCode, x.DepartureDate))
+            .ToListAsync(ct);
+        return Ok(new PagedResult<BookingListItemDto>(items, page.NormalizedPageIndex, page.NormalizedPageSize, count));
     }
 
     [HttpGet("{codeOrId}")]
-    public async Task<ActionResult<Bookings>> Get(string codeOrId, [FromQuery] string? phone, [FromQuery] string? email, CancellationToken ct)
+    public async Task<ActionResult<BookingDetailsDto>> Get(string codeOrId, [FromQuery] string? phone, [FromQuery] string? email, CancellationToken ct)
     {
         var query = db.Bookings.AsNoTracking().AsQueryable();
         if (long.TryParse(codeOrId, out var id)) query = query.Where(x => x.Id == id); else query = query.Where(x => x.BookingCode == codeOrId);
@@ -45,7 +66,7 @@ public sealed class BookingsController(AppDbContext db, BookingService bookings,
         var staff = current.Roles.Any(x => RoleCodes.InternalStaff.Contains(x));
         if (!staff && current.CustomerId != item.CustomerId && !(phone == item.ContactPhone && !string.IsNullOrWhiteSpace(phone)) && !(email != null && string.Equals(email, item.ContactEmail, StringComparison.OrdinalIgnoreCase)))
             throw new ForbiddenException("Provide the verified contact phone/email or sign in as the booking owner.");
-        return Ok(item);
+        return Ok(await bookings.BuildDetailsDtoAsync(item, ct));
     }
 
     [HttpPut("{id:long}/passengers"), Authorize]
@@ -54,14 +75,30 @@ public sealed class BookingsController(AppDbContext db, BookingService bookings,
         var booking = await bookings.GetAsync(id, ct); EnsureAccess(booking);
         var departure = await db.TourDepartures.SingleAsync(x => x.Id == booking.DepartureId, ct);
         if (departure.CutoffAt < DateTime.UtcNow) throw new ConflictException("Departure cutoff has passed.");
-        var expected = booking.AdultCount + booking.ChildCount + booking.InfantCount;
-        if (passengers.Count != expected || passengers.Count(x => x.PaxType == "Adult") != booking.AdultCount || passengers.Count(x => x.PaxType == "Child") != booking.ChildCount || passengers.Count(x => x.PaxType == "Infant") != booking.InfantCount)
-            throw new BadRequestException("Passenger manifest must match the booking counts.");
+        BookingService.ValidateManifest(passengers, booking.AdultCount, booking.ChildCount, booking.InfantCount);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var old = await db.BookingPassengers.Where(x => x.BookingId == id).ToListAsync(ct); db.BookingPassengers.RemoveRange(old);
-        db.BookingPassengers.AddRange(passengers.Select(p => new BookingPassengers { BookingId = id, PaxType = p.PaxType, FullName = p.FullName.Trim(), Nationality = p.Nationality, Gender = p.Gender, DateOfBirth = p.DateOfBirth, IdentityNumber = p.IdentityNumber, PassportExpiryDate = p.PassportExpiryDate, SpecialRequest = p.SpecialRequest, CheckInStatus = "Pending", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow }));
+        var now = DateTime.UtcNow;
+        db.BookingPassengers.AddRange(BookingService.ToPassengerEntities(id, passengers, now));
         await db.SaveChangesAsync(ct); await audit.WriteAsync("UpdatePassengers", "Bookings", id.ToString(), old.Count, passengers.Count, current.UserId, cancellationToken: ct); await tx.CommitAsync(ct); return NoContent();
     }
+
+    private sealed record BookingProjection(Bookings Booking, string TourTitle, string TourCode, string DepartureCode, DateOnly DepartureDate);
+
+    private IQueryable<BookingProjection> BuildListQuery() =>
+        from b in db.Bookings.AsNoTracking()
+        join d in db.TourDepartures.AsNoTracking() on b.DepartureId equals d.Id
+        join t in db.Tours.AsNoTracking() on b.TourId equals t.Id
+        select new BookingProjection(b, t.Title, t.Code, d.DepartureCode, d.DepartureDate);
+
+    private static BookingListItemDto ProjectListItem(Bookings b, string tourTitle, string tourCode, string departureCode, DateOnly departureDate) =>
+        new(b.Id, b.BookingCode, b.TourId, b.DepartureId, b.CustomerId, b.CreatedByUserId, b.SalesUserId, b.BookingChannel,
+            b.ContactName, b.ContactPhone, b.ContactEmail, b.SpecialNote, b.AdultCount, b.ChildCount, b.InfantCount,
+            b.SingleRoomCount, BookingStateRules.SeatsCount(b.AdultCount, b.ChildCount), b.SubTotal, b.DiscountAmount,
+            b.TaxMode, b.VatRate, b.AmountBeforeTax, b.VatAmount, b.TotalAmount, b.RequiredDepositAmount, b.PaidAmount,
+            b.CreditAmount, Math.Max(0m, b.TotalAmount - b.PaidAmount), b.PromotionId, b.PromoCodeApplied, b.PayOption,
+            b.RequireVatInvoice, b.Status, b.HoldExpiresAt, b.FinalPaymentDueAt, b.CreatedAt, b.UpdatedAt,
+            tourTitle, tourCode, departureCode, departureDate);
 
     [HttpPatch("{id:long}/adjust-pax"), Authorize(Roles = RoleCodes.Sales + "," + RoleCodes.Operator + "," + RoleCodes.Admin)]
     public async Task<IActionResult> Adjust(long id, AdjustPaxRequest request, CancellationToken ct) { await bookings.AdjustAsync(id, request, ct); return NoContent(); }

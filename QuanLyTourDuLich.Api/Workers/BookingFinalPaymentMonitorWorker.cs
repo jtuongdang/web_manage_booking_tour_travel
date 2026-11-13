@@ -24,10 +24,10 @@ public sealed class BookingFinalPaymentMonitorWorker(IServiceScopeFactory scopes
         await using var scope = scopes.CreateAsyncScope(); var sp = scope.ServiceProvider;
         var db = sp.GetRequiredService<AppDbContext>(); var notifications = sp.GetRequiredService<INotificationService>();
         var now = DateTime.UtcNow;
-        var due = await db.Bookings.Where(x => x.Status == "DepositPaid" && x.FinalPaymentDueAt != null && x.FinalPaymentDueAt < now).ToListAsync(ct);
+        var due = await db.Bookings.Where(x => x.Status == "DepositPaid" && x.FinalPaymentDueAt != null && x.FinalPaymentDueAt < now && x.TotalAmount > x.PaidAmount).ToListAsync(ct);
         foreach (var booking in due)
         {
-            var current = await db.Bookings.SingleOrDefaultAsync(x => x.Id == booking.Id && x.Status == "DepositPaid" && x.FinalPaymentDueAt < now, ct);
+            var current = await db.Bookings.SingleOrDefaultAsync(x => x.Id == booking.Id && x.Status == "DepositPaid" && x.FinalPaymentDueAt < now && x.TotalAmount > x.PaidAmount, ct);
             if (current is null) continue;
             current.Status = "FinalPaymentOverdue"; current.UpdatedAt = now;
             try

@@ -1,3 +1,4 @@
+using QuanLyTourDuLich.Api.Common.Exceptions;
 using QuanLyTourDuLich.Api.Models.Entities;
 using QuanLyTourDuLich.Api.Modules.BookingEngine;
 using Xunit;
@@ -62,5 +63,48 @@ public sealed class BookingPricingTests
     {
         Assert.Equal(allowed, BookingStateRules.CanEdit(status));
         Assert.Equal(allowed, BookingStateRules.CanRequestCancellation(status));
+    }
+
+    [Fact]
+    public void ComputedCapacityAndSeatHelpersIgnoreStaleAvailableColumn()
+    {
+        Assert.Equal(3, BookingStateRules.SeatsCount(2, 1));
+        Assert.Equal(4, BookingStateRules.RemainingCapacity(10, 2, 4));
+        Assert.True(BookingStateRules.CanReserve(10, 2, 4, 4));
+        Assert.False(BookingStateRules.CanReserve(10, 2, 4, 5));
+        Assert.True(BookingStateRules.CanAdjust(10, 2, 4, 4));
+        Assert.False(BookingStateRules.CanAdjust(10, 2, 4, 5));
+        Assert.True(BookingStateRules.CanAdjust(10, 2, 4, -2));
+    }
+
+    [Fact]
+    public void ReleaseRuleTreatsZeroPaymentHoldAsHeldSlotsNotBookedSlots()
+    {
+        Assert.False(BookingStateRules.ShouldReleaseBookedSlots(0m, 0m));
+        Assert.False(BookingStateRules.ShouldReleaseBookedSlots(500_000m, 900_000m));
+        Assert.True(BookingStateRules.ShouldReleaseBookedSlots(900_000m, 900_000m));
+    }
+
+    [Fact]
+    public void SubtotalIncludesSingleSupplementMatchingBookingPricing()
+    {
+        var subtotal = BookingPricing.CalculateSubtotal(Departure(), 2, 1, 1, 2);
+
+        Assert.Equal(3_250m, subtotal);
+    }
+
+    [Fact]
+    public void ValidateManifestRequiresMatchingPaxCountsAndNames()
+    {
+        var valid = new[]
+        {
+            new PassengerRequest("Adult", "Nguyen Van A"),
+            new PassengerRequest("Child", "Nguyen Van B")
+        };
+        BookingService.ValidateManifest(valid, 1, 1, 0);
+
+        Assert.Throws<BadRequestException>(() => BookingService.ValidateManifest(valid, 2, 0, 0));
+        Assert.Throws<BadRequestException>(() => BookingService.ValidateManifest(
+            [new PassengerRequest("Adult", "   ")], 1, 0, 0));
     }
 }

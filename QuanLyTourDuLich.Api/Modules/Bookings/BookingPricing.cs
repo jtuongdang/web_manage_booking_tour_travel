@@ -7,13 +7,16 @@ public sealed record BookingPrice(decimal SubTotal, decimal Discount, decimal Be
 
 public static class BookingPricing
 {
+    public static decimal CalculateSubtotal(TourDepartures departure, int adults, int children, int infants, int singleRooms) =>
+        adults * departure.AdultPrice + children * (departure.ChildPrice ?? departure.AdultPrice) +
+        infants * (departure.InfantPrice ?? 0m) + singleRooms * (departure.SingleSupplement ?? 0m);
+
     public static BookingPrice Calculate(TourDepartures departure, int adults, int children, int infants, int singleRooms,
         decimal discount, decimal vatRate, string taxMode, decimal depositPercent = 30m)
     {
         if (adults < 1 || children < 0 || infants < 0 || singleRooms < 0 || discount < 0 || vatRate is < 0 or > 100)
             throw new ArgumentOutOfRangeException(nameof(adults), "Invalid passenger count or pricing input.");
-        var subtotal = adults * departure.AdultPrice + children * (departure.ChildPrice ?? departure.AdultPrice) +
-                       infants * (departure.InfantPrice ?? 0m) + singleRooms * (departure.SingleSupplement ?? 0m);
+        var subtotal = CalculateSubtotal(departure, adults, children, infants, singleRooms);
         discount = Math.Min(subtotal, discount);
         var net = subtotal - discount;
         var included = string.Equals(taxMode, "Included", StringComparison.OrdinalIgnoreCase);

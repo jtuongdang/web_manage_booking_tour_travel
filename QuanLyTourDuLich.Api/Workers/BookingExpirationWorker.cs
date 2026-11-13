@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using QuanLyTourDuLich.Api.Data;
+using QuanLyTourDuLich.Api.Modules.BookingEngine;
 
 namespace QuanLyTourDuLich.Api.Workers;
 
@@ -28,9 +29,10 @@ public sealed class BookingExpirationWorker(IServiceScopeFactory scopes, ILogger
             var current = await db.Bookings.SingleOrDefaultAsync(x => x.Id == booking.Id && x.Status == "PendingPayment" && x.HoldExpiresAt < DateTime.UtcNow, ct);
             if (current is null) { await tx.RollbackAsync(ct); continue; }
             var departure = await db.TourDepartures.SingleAsync(x => x.Id == current.DepartureId, ct);
-            departure.HeldSlots = Math.Max(0, departure.HeldSlots - current.SeatsReserved);
-            departure.AvailableSlots = departure.TotalCapacity - departure.HeldSlots - departure.BookedSlots;
-            if (departure.Status == "Full" && departure.AvailableSlots > 0) departure.Status = "Open";
+            var seats = BookingStateRules.SeatsCount(current.AdultCount, current.ChildCount);
+            departure.HeldSlots = Math.Max(0, departure.HeldSlots - seats);
+            if (departure.Status == "Full" && BookingStateRules.RemainingCapacity(departure.TotalCapacity, departure.HeldSlots, departure.BookedSlots) > 0) departure.Status = "Open";
+            departure.UpdatedAt = DateTime.UtcNow;
             current.Status = "Expired"; current.UpdatedAt = DateTime.UtcNow;
             var usage = await db.PromotionUsages.SingleOrDefaultAsync(x => x.BookingId == current.Id && x.Status == "Reserved", ct);
             if (usage is not null) { usage.Status = "Released"; usage.ReleasedAt = DateTime.UtcNow; var promo = await db.Promotions.SingleAsync(x => x.Id == usage.PromotionId, ct); promo.UsedCount = Math.Max(0, promo.UsedCount - 1); }
