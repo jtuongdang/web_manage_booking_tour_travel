@@ -77,22 +77,62 @@ public sealed class InvoicesController(
         return Ok(new PagedResult<SimulatedInvoices>(items, pageIndex, pageSize, total));
     }
 
+    [HttpGet("/api/v1/bookings/{bookingId:long}/invoice")]
+    [Authorize]
+    public async Task<ActionResult<SimulatedInvoices>> GetByBookingId(long bookingId, CancellationToken cancellationToken)
+    {
+        await EnsureCanAccessInvoiceAsync(bookingId, cancellationToken);
+        var invoice = await db.SimulatedInvoices.AsNoTracking()
+            .OrderByDescending(x => x.Id)
+            .FirstOrDefaultAsync(x => x.BookingId == bookingId, cancellationToken)
+            ?? throw new NotFoundException("Booking chưa được xuất hóa đơn mô phỏng.");
+        return Ok(invoice);
+    }
+
     [HttpGet("{id:long}")]
-    [Authorize(Roles = RoleCodes.Accountant + "," + RoleCodes.Admin + "," + RoleCodes.Sales)]
+    [Authorize]
     public async Task<ActionResult<SimulatedInvoices>> GetById(long id, CancellationToken cancellationToken)
     {
         var invoice = await db.SimulatedInvoices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
             ?? throw new NotFoundException("Không tìm thấy hóa đơn.");
+        await EnsureCanAccessInvoiceAsync(invoice.BookingId, cancellationToken);
         return Ok(invoice);
     }
 
     [HttpGet("{id:long}/preview")]
-    [Authorize(Roles = RoleCodes.Accountant + "," + RoleCodes.Admin + "," + RoleCodes.Sales)]
+    [Authorize]
     public async Task<IActionResult> Preview(long id, CancellationToken cancellationToken)
     {
         var invoice = await db.SimulatedInvoices.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
             ?? throw new NotFoundException("Không tìm thấy hóa đơn.");
+        await EnsureCanAccessInvoiceAsync(invoice.BookingId, cancellationToken);
         var rendered = await taxInvoiceService.RenderSimulatedInvoiceHtmlAsync(invoice.BookingId, invoice.InvoiceNumber, invoice.SerialNumber, invoice.LookupCode, cancellationToken);
         return Content(rendered.HtmlContent, "text/html; charset=utf-8");
+    }
+
+    private async Task EnsureCanAccessInvoiceAsync(long bookingId, CancellationToken cancellationToken)
+    {
+        if (User.IsInRole(RoleCodes.Accountant) || User.IsInRole(RoleCodes.Admin) || User.IsInRole(RoleCodes.Sales))
+        {
+            return;
+        }
+
+        var customerId = await db.Bookings.AsNoTracking()
+            .Where(b => b.Id == bookingId)
+            .Select(b => (int?)b.CustomerId)
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("Không tìm thấy booking.");
+
+        if (currentUser.CustomerId == customerId)
+        {
+            return;
+        }
+
+        if (currentUser.UserId.HasValue && await db.Customers.AsNoTracking().AnyAsync(c => c.Id == customerId && c.UserId == currentUser.UserId.Value, cancellationToken))
+        {
+            return;
+        }
+
+        throw new ForbiddenException("Bạn không có quyền xem hóa đơn của booking này.");
     }
 }

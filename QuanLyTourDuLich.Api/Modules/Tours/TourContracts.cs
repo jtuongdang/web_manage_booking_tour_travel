@@ -12,7 +12,8 @@ public sealed record TourQuery(
 public sealed record TourListItem(int Id, string Code, string Slug, string Title, string TourType,
     string ScopeType, string? Tags, string DepartureFrom, string Destination, byte DurationDays,
     decimal BaseAdultPrice, bool IsPublic, string Status, decimal AverageRating, int ReviewCount,
-    DateOnly? NextDepartureDate, int? AvailableSlots);
+    DateOnly? NextDepartureDate, int? AvailableSlots,
+    decimal? OriginalPrice = null, string? Transport = null, string? Badges = null, string? CoverImageUrl = null, int? NextDepartureId = null);
 
 public sealed record TourDetail(QuanLyTourDuLich.Api.Models.Entities.Tours Tour, IReadOnlyList<TourItineraries> Itineraries,
     IReadOnlyList<TourImages> Images, CancellationPolicyDetail CancellationPolicy,

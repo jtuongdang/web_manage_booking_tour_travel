@@ -40,14 +40,24 @@ public sealed class TourCatalogService(AppDbContext db)
         var total = await query.CountAsync(ct);
         var tours = await query.OrderBy(t => t.Title).Skip((q.PageIndex - 1) * q.PageSize).Take(q.PageSize).ToListAsync(ct);
         var ids = tours.Select(t => t.Id).ToArray();
-        var departures = await db.TourDepartures.AsNoTracking().Where(d => ids.Contains(d.TourId) && d.DepartureDate >= DateOnly.FromDateTime(DateTime.UtcNow) && (internalView || d.IsPublic))
+        var departures = await db.TourDepartures.AsNoTracking()
+            .Where(d => ids.Contains(d.TourId) && d.DepartureDate >= DateOnly.FromDateTime(DateTime.UtcNow) && (internalView || (d.IsPublic && d.Status != "Cancelled")))
             .OrderBy(d => d.DepartureDate).ToListAsync(ct);
         var firstByTour = departures.GroupBy(d => d.TourId).ToDictionary(g => g.Key, g => g.First());
+        var images = await db.TourImages.AsNoTracking()
+            .Where(i => ids.Contains(i.TourId))
+            .OrderByDescending(i => i.IsCover)
+            .ThenBy(i => i.SortOrder)
+            .ToListAsync(ct);
+        var coverByTour = images.GroupBy(i => i.TourId).ToDictionary(g => g.Key, g => g.First().ImageUrl);
         return (tours.Select(t =>
         {
             firstByTour.TryGetValue(t.Id, out var next);
+            coverByTour.TryGetValue(t.Id, out var coverUrl);
+            int? nextAvailable = next is null ? null : next.TotalCapacity - next.HeldSlots - next.BookedSlots;
             return new TourListItem(t.Id, t.Code, t.Slug, t.Title, t.TourType, t.ScopeType, t.Tags, t.DepartureFrom, t.Destination,
-                t.DurationDays, t.BaseAdultPrice, t.IsPublic, t.Status, t.AverageRating, t.ReviewCount, next?.DepartureDate, next?.AvailableSlots);
+                t.DurationDays, t.BaseAdultPrice, t.IsPublic, t.Status, t.AverageRating, t.ReviewCount, next?.DepartureDate, nextAvailable,
+                t.OriginalPrice, t.Transport, t.Badges, coverUrl, next?.Id);
         }).ToList(), total);
     }
 
@@ -61,7 +71,7 @@ public sealed class TourCatalogService(AppDbContext db)
         var rules = await db.CancellationPolicyRules.AsNoTracking().Where(r => r.PolicyId == policy.Id).OrderBy(r => r.SortOrder).ToListAsync(ct);
         var itineraries = await db.TourItineraries.AsNoTracking().Where(x => x.TourId == tour.Id).OrderBy(x => x.DayNumber).ToListAsync(ct);
         var images = await db.TourImages.AsNoTracking().Where(x => x.TourId == tour.Id).OrderBy(x => x.SortOrder).ToListAsync(ct);
-        var departures = await db.TourDepartures.AsNoTracking().Where(x => x.TourId == tour.Id && x.DepartureDate >= DateOnly.FromDateTime(DateTime.UtcNow) && (canSeeInternal || x.IsPublic))
+        var departures = await db.TourDepartures.AsNoTracking().Where(x => x.TourId == tour.Id && x.DepartureDate >= DateOnly.FromDateTime(DateTime.UtcNow) && (canSeeInternal || (x.IsPublic && x.Status != "Cancelled")))
             .OrderBy(x => x.DepartureDate).Take(20).ToListAsync(ct);
         var reviews = await db.TourReviews.AsNoTracking().Where(x => x.TourId == tour.Id && !x.IsHidden)
             .GroupBy(_ => 1).Select(g => new { Count = g.Count(), Average = g.Average(x => (double)x.OverallRating) }).FirstOrDefaultAsync(ct);

@@ -81,15 +81,17 @@ public sealed class DeparturesController(AppDbContext db, DepartureService servi
     }
 
     [HttpPatch("{id:int}/status")]
-    [Authorize(Policy = PolicyNames.RequireOperatorOrAdmin)]
+    [Authorize(Roles = RoleCodes.Operator + "," + RoleCodes.Accountant + "," + RoleCodes.Admin)]
     public async Task<IActionResult> SetStatus(int id, DepartureStatusRequest request, CancellationToken ct)
     {
         if (!DepartureValidation.Statuses.Contains(request.Status, StringComparer.Ordinal)) throw new BadRequestException("Departure status is invalid.");
         var departure = await db.TourDepartures.FirstOrDefaultAsync(d => d.Id == id, ct) ?? throw new NotFoundException("Departure was not found.");
         if (departure.Status == "Settled" && request.Status != "Settled") throw new ConflictException("Settled departures are locked.");
-        if (request.Status == "Settled" && !User.IsInRole(RoleCodes.Admin)) throw new ForbiddenException("Only an administrator may mark a departure as settled.");
-        if (request.Status == "Full" && departure.AvailableSlots > 0) throw new BadRequestException("A departure with available seats cannot be marked Full.");
-        if (request.Status == "Open" && departure.AvailableSlots <= 0) throw new ConflictException("A full departure cannot be reopened until seats are available.");
+        if (request.Status == "Settled" && !User.IsInRole(RoleCodes.Admin) && !User.IsInRole(RoleCodes.Accountant)) throw new ForbiddenException("Only an accountant or administrator may mark a departure as settled.");
+        if (request.Status != "Settled" && !User.IsInRole(RoleCodes.Operator) && !User.IsInRole(RoleCodes.Admin)) throw new ForbiddenException("Only an operator or administrator may change operational departure status.");
+        var availableSlots = departure.TotalCapacity - departure.HeldSlots - departure.BookedSlots;
+        if (request.Status == "Full" && availableSlots > 0) throw new BadRequestException("A departure with available seats cannot be marked Full.");
+        if (request.Status == "Open" && availableSlots <= 0) throw new ConflictException("A full departure cannot be reopened until seats are available.");
         departure.Status = request.Status; departure.UpdatedAt = DateTime.UtcNow;
         if (request.Status == "Settled") { departure.SettledAt = DateTime.UtcNow; departure.SettledByUserId = ParseUserId(); }
         try { await db.SaveChangesAsync(ct); }
