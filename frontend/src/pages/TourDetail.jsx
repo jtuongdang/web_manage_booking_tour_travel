@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Bus, Calendar, Check, CircleCheck, Clock, MapPin, Minus, Plane, Plus, ShieldCheck, Star, Utensils, X, Zap } from 'lucide-react';
-import { findTour, reviews } from '../data/tours';
+import { toursApi } from '../api/toursApi';
 import { calcPrice, fmtDate, vnd } from '../utils/format';
 
 function Stepper({ label, hint, value, setValue, min = 0, max }) {
@@ -20,18 +20,37 @@ function Stepper({ label, hint, value, setValue, min = 0, max }) {
 export default function TourDetail() {
   const { slug } = useParams();
   const navigate = useNavigate();
-  const tour = findTour(slug);
-  const departures = useMemo(() => tour?.departures ?? [], [tour]);
-  const [depId, setDepId] = useState(() => departures.find((d) => d.available > 0)?.id);
+  const [tour, setTour] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [depId, setDepId] = useState();
   const [adults, setAdults] = useState(2);
   const [children, setChildren] = useState(0);
   const [infants, setInfants] = useState(0);
   const [singleRooms, setSingleRooms] = useState(0);
   const [tab, setTab] = useState('overview');
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    toursApi.get(slug).then((result) => {
+      if (active) {
+        setTour(result);
+        setDepId(result.departures.find((departure) => departure.available > 0)?.id);
+        setError('');
+      }
+    }).catch((requestError) => {
+      if (active) setError(requestError.message || 'Không thể tải thông tin tour.');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [slug]);
+  const departures = tour?.departures ?? [];
 
-  if (!tour) return <div className="container page empty">Không tìm thấy tour. <Link to="/tours">Quay lại danh sách</Link></div>;
+  if (loading) return <div className="container page muted">Đang tải thông tin tour…</div>;
+  if (error || !tour) return <div className="container page empty" role="alert">{error ? `Không thể tải tour: ${error}` : 'Không tìm thấy tour.'} <Link to="/tours">Quay lại danh sách</Link></div>;
 
-  const dep = departures.find((d) => d.id === depId);
+  const dep = departures.find((d) => String(d.id) === String(depId));
   const seats = adults + children;
   const notEnough = dep && seats > dep.available;
   const price = dep ? calcPrice({ tour, departure: dep, adults, children, infants, singleRooms }) : null;
@@ -49,7 +68,7 @@ export default function TourDetail() {
       <h1 className="detail-title">{tour.title}</h1>
       <div className="detail-meta">
         <span className="rating"><Star size={16} fill="currentColor" /> <b>{tour.rating}</b> ({tour.reviewCount.toLocaleString('vi-VN')} đánh giá)</span>
-        <span>{tour.bookedCount.toLocaleString('vi-VN')}+ khách đã đặt</span>
+        {tour.bookedCount > 0 && <span>{Number(tour.bookedCount).toLocaleString('vi-VN')}+ khách đã đặt</span>}
         <span>Mã tour: <b>{tour.code}</b></span>
       </div>
 
@@ -111,11 +130,11 @@ export default function TourDetail() {
                 <thead><tr><th scope="col">Ngày khởi hành</th><th scope="col">Giá người lớn</th><th scope="col">Chỗ còn</th><th scope="col"><span className="sr-only">Chọn</span></th></tr></thead>
                 <tbody>
                   {departures.map((d) => (
-                    <tr key={d.id} className={d.id === depId ? 'selected' : ''}>
+                    <tr key={d.id} className={String(d.id) === String(depId) ? 'selected' : ''}>
                       <td><Calendar size={14} /> {fmtDate(d.departureDate)}</td>
                       <td className="price-cell">{vnd(d.adultPrice)}</td>
                       <td>{d.available > 0 ? <span className={d.available <= 5 ? 'urgent' : 'green'}>{d.available}/{d.capacity}</span> : <span className="sold">Hết chỗ</span>}</td>
-                      <td><button type="button" className="btn btn-sm btn-outline" disabled={!d.available} onClick={() => setDepId(d.id)}>{d.id === depId ? 'Đã chọn' : 'Chọn'}</button></td>
+                      <td><button type="button" className="btn btn-sm btn-outline" disabled={!d.available} onClick={() => setDepId(d.id)}>{String(d.id) === String(depId) ? 'Đã chọn' : 'Chọn'}</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -127,15 +146,10 @@ export default function TourDetail() {
           <section id="policy" className="card">
             <h2>Chính sách hoàn / hủy</h2>
             <table className="policy-table">
-              <tbody>
-                <tr><td>Hủy trước ≥ 15 ngày</td><td>Phí 10%</td></tr>
-                <tr><td>Hủy từ 7 – 14 ngày</td><td>Phí 30%</td></tr>
-                <tr><td>Hủy từ 3 – 6 ngày</td><td>Phí 50%</td></tr>
-                <tr><td>Hủy dưới 3 ngày / Không đến</td><td>Phí 100%</td></tr>
-                <tr><td>Công ty hủy đoàn (không đủ khách)</td><td className="green">Hoàn 100% hoặc đổi ngày miễn phí</td></tr>
-              </tbody>
+              <tbody>{(tour.policy?.rules ?? []).map((rule) => <tr key={rule.id}><td>{rule.label}</td><td>Phí {rule.penaltyPercent}%</td></tr>)}</tbody>
             </table>
-            <p className="muted small">Đặt cọc tối thiểu 30% để giữ chỗ chính thức. Thanh toán phần còn lại trước ngày khởi hành 5 ngày. Giá đã bao gồm VAT 8% (mô phỏng).</p>
+            {!tour.policy?.rules?.length && <p className="muted">Chưa có chi tiết điều khoản hủy từ hệ thống.</p>}
+            <p className="muted small">{tour.policy?.policy?.description || 'Mức cọc, thuế và phí được tính lại theo cấu hình backend khi tạo booking.'}</p>
           </section>
 
           <section id="reviews" className="card">
@@ -148,7 +162,7 @@ export default function TourDetail() {
                 ))}
               </div>
             </div>
-            {reviews.map((r) => (
+            {tour.reviews.map((r) => (
               <article key={r.id} className="review">
                 <div className="review-head">
                   <div className="avatar">{r.name.split(' ').pop()[0]}</div>
@@ -162,6 +176,7 @@ export default function TourDetail() {
                 {r.reply && <div className="reply"><b>Phản hồi từ VietTour:</b> {r.reply}</div>}
               </article>
             ))}
+            {!tour.reviews.length && <p className="muted">Chưa có đánh giá chi tiết cho tour này.</p>}
           </section>
         </div>
 

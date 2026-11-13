@@ -3,9 +3,9 @@ import { Clock, Heart, MapPin } from 'lucide-react';
 import { vnd } from '../utils/format';
 
 export default function TourCard({ tour }) {
-  const discount = Math.round((1 - tour.price / tour.originalPrice) * 100);
+  const discount = tour.originalPrice > 0 ? Math.round((1 - tour.price / tour.originalPrice) * 100) : 0;
   const nextDep = tour.departures.find((d) => d.available > 0);
-  const score10 = (tour.rating * 2).toFixed(1);
+  const score10 = (Number(tour.rating || 0) * 2).toFixed(1);
 
   return (
     <article className="tour-card">

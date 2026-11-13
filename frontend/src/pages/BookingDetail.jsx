@@ -1,10 +1,13 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { CircleCheck, FileText, Printer, XCircle } from 'lucide-react';
-import { useBookings } from '../store/BookingContext';
-import { cancellationFeePercent, daysUntil, fmtDate, vnd } from '../utils/format';
+import { apiGet } from '../api/client';
+import { bookingsApi } from '../api/bookingsApi';
+import { toursApi } from '../api/toursApi';
+import { requestSignIn, useAuth } from '../store/AuthContext';
 import { Steps } from './Checkout';
+import { fmtDate, vnd } from '../utils/format';
 
 export const STATUS = {
   PendingPayment: { label: 'Chờ thanh toán', cls: 'st-warn' },
@@ -13,36 +16,148 @@ export const STATUS = {
   CancellationRequested: { label: 'Đang yêu cầu hủy', cls: 'st-warn' },
   Cancelled: { label: 'Đã hủy', cls: 'st-muted' },
   Expired: { label: 'Hết hạn giữ chỗ', cls: 'st-muted' },
+  FinalPaymentOverdue: { label: 'Quá hạn thanh toán', cls: 'st-warn' },
+  Refunded: { label: 'Đã hoàn tiền', cls: 'st-muted' },
   Completed: { label: 'Hoàn thành', cls: 'st-ok' },
 };
 
 export default function BookingDetail() {
   const { code } = useParams();
   const [params] = useSearchParams();
-  const { getBooking, updateBooking } = useBookings();
-  const b = getBooking(code);
+  const auth = useAuth();
   const cancelRef = useRef(null);
-  const invoiceRef = useRef(null);
+  const [booking, setBooking] = useState(null);
+  const [departures, setDepartures] = useState([]);
+  const [invoice, setInvoice] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const [reason, setReason] = useState('');
+  const [newDepartureId, setNewDepartureId] = useState('');
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
 
-  if (!b) return <div className="container page empty">Không tìm thấy đơn {code}. <Link to="/my-bookings">Xem đơn của tôi</Link></div>;
+  const loadBooking = async () => {
+    const result = await bookingsApi.get(code);
+    setBooking(result);
+    const items = await toursApi.departures(result.tourId);
+    setDepartures(items.filter((item) => item.available > 0));
+  };
 
+  useEffect(() => {
+    if (auth.initializing) return undefined;
+    if (!auth.user) {
+      setBooking(null);
+      setLoading(false);
+      setError('Đăng nhập để xem chi tiết đơn đặt tour.');
+      return undefined;
+    }
+    let active = true;
+    setLoading(true);
+    Promise.resolve().then(async () => {
+      const result = await bookingsApi.get(code);
+      if (!active) return;
+      setBooking(result);
+      const items = await toursApi.departures(result.tourId);
+      if (active) {
+        setDepartures(items.filter((item) => item.available > 0));
+        setError('');
+      }
+    }).catch((requestError) => {
+      if (active) setError(requestError.message || 'Không thể tải thông tin đơn đặt tour.');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [code, auth.initializing, auth.user]);
+
+  if (loading) return <div className="container page muted">Đang tải đơn đặt tour…</div>;
+  if (!booking) return <div className="container page empty" role="alert">{error || `Không tìm thấy đơn ${code}.`} {!auth.user && <button type="button" className="btn btn-primary" onClick={requestSignIn}>Đăng nhập</button>} <Link to="/my-bookings">Xem đơn của tôi</Link></div>;
+
+  const b = booking;
   const st = STATUS[b.status] ?? { label: b.status, cls: '' };
-  const days = daysUntil(b.departureDate);
-  const feePct = cancellationFeePercent(days);
-  const penalty = Math.round((b.price.total * feePct) / 100);
-  const refund = Math.max(0, b.paidAmount - penalty);
+  const passengers = b.passengers ?? [];
+  const payments = b.payments ?? [];
   const canCancel = ['PendingPayment', 'DepositPaid', 'Confirmed'].includes(b.status);
+  const canReschedule = ['PendingPayment', 'DepositPaid', 'Confirmed'].includes(b.status);
   const justPaid = params.get('paid') === '1';
 
-  const onCancelClose = () => {
-    const dlg = cancelRef.current;
-    if (dlg.returnValue === 'confirm') {
-      updateBooking(code, b.paidAmount > 0
-        ? { status: 'CancellationRequested', cancelRequest: { reason, feePct, penalty, refund, requestedAt: new Date().toISOString() } }
-        : { status: 'Cancelled' });
+  const cancel = async (event) => {
+    event.preventDefault();
+    if (!reason) {
+      setError('Vui lòng chọn lý do hủy.');
+      return;
     }
-    dlg.returnValue = '';
+    setBusy(true);
+    setError('');
+    try {
+      await bookingsApi.cancel(b.id, reason);
+      cancelRef.current?.close();
+      await loadBooking();
+    } catch (requestError) {
+      setError(requestError.message || 'Không thể gửi yêu cầu hủy.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reschedule = async (event) => {
+    event.preventDefault();
+    if (!newDepartureId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await bookingsApi.reschedule(b.id, Number(newDepartureId), 'Khách yêu cầu đổi ngày khởi hành');
+      setNewDepartureId('');
+      await loadBooking();
+    } catch (requestError) {
+      setError(requestError.message || 'Không thể đổi ngày khởi hành.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openInvoice = async (download = false) => {
+    const preview = download ? null : window.open('about:blank', '_blank');
+    if (!download && !preview) {
+      setError('Trình duyệt đã chặn cửa sổ xem hóa đơn.');
+      return;
+    }
+    try {
+      const currentInvoice = await bookingsApi.invoice(b.id);
+      setInvoice(currentInvoice);
+      const html = await apiGet(`/api/v1/invoices/${currentInvoice.id}/preview`, { responseType: 'text' });
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      if (download) {
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `invoice-${currentInvoice.invoiceNumber}.html`;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } else {
+        preview.location.href = url;
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }
+    } catch (requestError) {
+      preview?.close();
+      setError(requestError.message || 'Không thể tải hóa đơn VAT.');
+    }
+  };
+
+  const submitReview = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await bookingsApi.submitReview(b.id, { overallRating: Number(reviewRating), comment: reviewComment });
+      setReviewComment('');
+      setError('Đã gửi đánh giá tour.');
+    } catch (requestError) {
+      setError(requestError.message || 'API đánh giá booking chưa khả dụng.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -53,26 +168,24 @@ export default function BookingDetail() {
           <CircleCheck size={48} />
           <div>
             <h1>Thanh toán thành công!</h1>
-            <p>Đơn <b>{b.code}</b> {b.status === 'Confirmed' ? 'đã được xác nhận chỗ chính thức' : 'đã đặt cọc thành công, chỗ đã được giữ'}. Email xác nhận đã gửi tới <b>{b.contact.email}</b>.</p>
+            <p>Đơn <b>{b.code}</b> {b.status === 'Confirmed' ? 'đã được xác nhận chỗ chính thức' : 'đã được cập nhật thanh toán'}.</p>
           </div>
         </div>
       )}
+      {error && <p className={error.startsWith('Đã gửi') ? 'alert alert-success' : 'error-text'} role="status">{error}</p>}
 
       <div className="detail-layout">
         <div>
           <section className="card">
             <div className="bk-head">
-              <div>
-                <div className="muted small">Mã đặt tour</div>
-                <h2 className="bk-code">{b.code}</h2>
-              </div>
+              <div><div className="muted small">Mã đặt tour</div><h2 className="bk-code">{b.code}</h2></div>
               <span className={`status ${st.cls}`}>{st.label}</span>
             </div>
             <div className="bk-tour">
               <img src={b.image} alt="" />
               <div>
                 <Link to={`/tours/${b.tourSlug}`}><b>{b.tourTitle}</b></Link>
-                <div className="muted small">Mã tour {b.tourCode} · Khởi hành {fmtDate(b.departureDate)} ({days >= 0 ? `còn ${days} ngày` : 'đã khởi hành'})</div>
+                <div className="muted small">Mã tour {b.tourCode || b.tourId} · Khởi hành {b.departureDate ? fmtDate(b.departureDate) : '—'}</div>
                 <div className="muted small">{b.adults} người lớn{b.children ? `, ${b.children} trẻ em` : ''}{b.infants ? `, ${b.infants} em bé` : ''}{b.singleRooms ? ` · ${b.singleRooms} phòng đơn` : ''}</div>
               </div>
             </div>
@@ -80,116 +193,85 @@ export default function BookingDetail() {
 
           <section className="card">
             <h3>Hành khách</h3>
-            <div className="table-wrap">
-              <table className="dep-table">
-                <thead><tr><th scope="col">#</th><th scope="col">Họ tên</th><th scope="col">Loại</th><th scope="col">Giới tính</th><th scope="col">Ngày sinh</th><th scope="col">Giấy tờ</th></tr></thead>
-                <tbody>
-                  {b.passengers.map((p, i) => (
-                    <tr key={i}><td>{i + 1}</td><td>{p.fullName}</td><td>{p.type}</td><td>{p.gender}</td><td>{p.dob ? fmtDate(p.dob) : '—'}</td><td>{p.idNumber ? `•••${p.idNumber.slice(-4)}` : <span className="muted">Bổ sung sau</span>}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {passengers.length ? (
+              <div className="table-wrap">
+                <table className="dep-table">
+                  <thead><tr><th scope="col">#</th><th scope="col">Họ tên</th><th scope="col">Loại</th><th scope="col">Giới tính</th><th scope="col">Ngày sinh</th><th scope="col">Giấy tờ</th></tr></thead>
+                  <tbody>{passengers.map((p, index) => <tr key={p.id ?? index}><td>{index + 1}</td><td>{p.fullName}</td><td>{p.paxType}</td><td>{p.gender || '—'}</td><td>{p.dateOfBirth ? fmtDate(p.dateOfBirth) : '—'}</td><td>{p.identityNumber ? `•••${p.identityNumber.slice(-4)}` : '—'}</td></tr>)}</tbody>
+                </table>
+              </div>
+            ) : <p className="muted">Backend hiện chưa cung cấp endpoint đọc danh sách hành khách cho đơn này.</p>}
             <p className="muted small">Liên hệ: {b.contact.name} · {b.contact.phone} · {b.contact.email}{b.contact.note ? ` · Ghi chú: ${b.contact.note}` : ''}</p>
           </section>
 
           <section className="card">
             <h3>Lịch sử thanh toán</h3>
-            {b.payments.length ? (
-              <ul className="pay-history">
-                {b.payments.map((p) => (
-                  <li key={p.txCode}><CircleCheck size={16} className="green" /> <b>{vnd(p.amount)}</b> qua {p.method} · Mã GD {p.txCode} · Ref {p.bankRef} · {new Date(p.paidAt).toLocaleString('vi-VN')}</li>
-                ))}
-              </ul>
-            ) : <p className="muted">Chưa có giao dịch.</p>}
-            {b.cancelRequest && (
-              <div className="alert alert-warn">
-                Yêu cầu hủy gửi lúc {new Date(b.cancelRequest.requestedAt).toLocaleString('vi-VN')} · Phí hủy {b.cancelRequest.feePct}% ({vnd(b.cancelRequest.penalty)}) · Dự kiến hoàn <b>{vnd(b.cancelRequest.refund)}</b> sau khi kế toán duyệt (3–7 ngày làm việc).
-              </div>
-            )}
+            {payments.length ? (
+              <ul className="pay-history">{payments.map((payment) => <li key={payment.transactionCode}><CircleCheck size={16} className="green" /> <b>{vnd(payment.actualReceivedAmount)}</b> · Mã GD {payment.transactionCode} · {payment.status}</li>)}</ul>
+            ) : <p className="muted">Backend chưa cung cấp danh sách giao dịch theo booking.</p>}
           </section>
+
+          {canReschedule && (
+            <section className="card">
+              <h3>Đổi ngày khởi hành</h3>
+              <form className="grid-2" onSubmit={reschedule}>
+                <div className="field">
+                  <label htmlFor="reschedule-departure">Lịch khởi hành mới</label>
+                  <select id="reschedule-departure" value={newDepartureId} onChange={(event) => setNewDepartureId(event.target.value)} required>
+                    <option value="">Chọn ngày khởi hành</option>
+                    {departures.filter((item) => item.id !== b.departureId).map((item) => <option key={item.id} value={item.id}>{fmtDate(item.departureDate)} · còn {item.availableSlots} chỗ</option>)}
+                  </select>
+                </div>
+                <button className="btn btn-outline" type="submit" disabled={busy || !newDepartureId}>Xác nhận đổi ngày</button>
+              </form>
+            </section>
+          )}
+
+          {b.status === 'Completed' && (
+            <section className="card">
+              <h3>Đánh giá tour</h3>
+              <form onSubmit={submitReview}>
+                <div className="field"><label htmlFor="review-rating">Điểm đánh giá</label><select id="review-rating" value={reviewRating} onChange={(event) => setReviewRating(event.target.value)}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{rating} sao</option>)}</select></div>
+                <div className="field"><label htmlFor="review-comment">Nhận xét</label><textarea id="review-comment" value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} required /></div>
+                <button className="btn btn-primary" type="submit" disabled={busy}>Gửi đánh giá</button>
+              </form>
+            </section>
+          )}
         </div>
 
         <aside className="booking-widget">
-          <div className="ticket-qr">
-            <QRCodeSVG value={`BOOKING:${b.code}`} size={120} />
-            <div className="muted small">Xuất trình mã này cho HDV khi check-in</div>
-          </div>
+          <div className="ticket-qr"><QRCodeSVG value={`BOOKING:${b.code}`} size={120} /><div className="muted small">Xuất trình mã này cho HDV khi check-in</div></div>
           <div className="bw-summary">
             <div><span>Tạm tính</span><span>{vnd(b.price.subTotal)}</span></div>
             {b.price.discount > 0 && <div className="green"><span>Giảm giá ({b.promoCode})</span><span>−{vnd(b.price.discount)}</span></div>}
             <div className="total"><span>Tổng cộng</span><span>{vnd(b.price.total)}</span></div>
-            <div className="muted small"><span>Trong đó VAT 8%</span><span>{vnd(b.price.vatAmount)}</span></div>
+            <div className="muted small"><span>VAT</span><span>{vnd(b.price.vatAmount)}</span></div>
             <div><span>Đã thanh toán</span><span className="green">{vnd(b.paidAmount)}</span></div>
             <div className="pay-now"><span>Còn lại</span><span>{vnd(b.price.total - b.paidAmount)}</span></div>
           </div>
-
-          {['PendingPayment', 'DepositPaid'].includes(b.status) && (
-            <Link to={`/payment/${b.code}`} className="btn btn-primary btn-block">{b.status === 'DepositPaid' ? 'Thanh toán phần còn lại' : 'Tiếp tục thanh toán'}</Link>
-          )}
-          {b.invoiceNo && <button type="button" className="btn btn-outline btn-block" onClick={() => invoiceRef.current.showModal()}><FileText size={16} /> Xem hóa đơn VAT</button>}
-          {b.invoice && !b.invoiceNo && <p className="muted small center">Hóa đơn VAT sẽ được phát hành khi thanh toán đủ.</p>}
-          {canCancel && <button type="button" className="btn btn-ghost-danger btn-block" onClick={() => cancelRef.current.showModal()}><XCircle size={16} /> Yêu cầu hủy tour</button>}
+          {['PendingPayment', 'DepositPaid'].includes(b.status) && <Link to={`/payment/${b.code}`} className="btn btn-primary btn-block">{b.status === 'DepositPaid' ? 'Thanh toán phần còn lại' : 'Tiếp tục thanh toán'}</Link>}
+          {b.invoice && <p className="muted small center">Hóa đơn mô phỏng sẽ khả dụng sau khi nhân viên phát hành.</p>}
+          {invoice && <p className="muted small">Hóa đơn: {invoice.invoiceNumber}</p>}
+          {canCancel && <button type="button" className="btn btn-ghost-danger btn-block" onClick={() => cancelRef.current?.showModal()}><XCircle size={16} /> Yêu cầu hủy tour</button>}
+          {canCancel && <dialog ref={cancelRef} className="modal" aria-labelledby="cancel-title" closedby="any">
+            <h2 id="cancel-title">Yêu cầu hủy đơn {b.code}?</h2>
+            <form onSubmit={cancel}>
+              <div className="field">
+                <label htmlFor="cancel-reason">Lý do hủy</label>
+                <select id="cancel-reason" value={reason} onChange={(event) => setReason(event.target.value)} required>
+                  <option value="">— Chọn lý do —</option><option>Thay đổi kế hoạch cá nhân</option><option>Lý do sức khỏe</option><option>Tìm được tour khác phù hợp hơn</option><option>Khác</option>
+                </select>
+              </div>
+              <div className="modal-actions"><button type="button" className="btn btn-outline" onClick={() => cancelRef.current?.close()}>Giữ lại đơn</button><button type="submit" className="btn btn-danger" disabled={busy}>Xác nhận hủy</button></div>
+            </form>
+          </dialog>}
+          {b.requireVatInvoice && <div className="invoice-actions">
+            <button type="button" className="btn btn-outline btn-block" onClick={() => openInvoice()}><FileText size={16} /> Xem hóa đơn VAT</button>
+            <button type="button" className="btn btn-ghost btn-block" onClick={() => openInvoice(true)}><Printer size={16} /> Tải hóa đơn HTML</button>
+          </div>}
           <Link to="/my-bookings" className="btn btn-ghost btn-block">← Danh sách đơn của tôi</Link>
         </aside>
       </div>
-
-      {/* Hộp thoại hủy tour: dùng <dialog> native */}
-      <dialog ref={cancelRef} className="modal" aria-labelledby="cancel-title" onClose={onCancelClose} closedby="any">
-        <h2 id="cancel-title">Yêu cầu hủy đơn {b.code}?</h2>
-        {b.paidAmount > 0 ? (
-          <table className="policy-table">
-            <tbody>
-              <tr><td>Số ngày trước khởi hành</td><td>{days} ngày</td></tr>
-              <tr><td>Phí hủy theo chính sách</td><td>{feePct}% × {vnd(b.price.total)} = <b>{vnd(penalty)}</b></td></tr>
-              <tr><td>Đã thanh toán</td><td>{vnd(b.paidAmount)}</td></tr>
-              <tr><td>Số tiền dự kiến hoàn</td><td className="green"><b>{vnd(refund)}</b></td></tr>
-            </tbody>
-          </table>
-        ) : <p>Đơn chưa thanh toán, chỗ giữ sẽ được trả lại ngay và không mất phí.</p>}
-        <form method="dialog">
-          <div className="field">
-            <label htmlFor="cancel-reason">Lý do hủy</label>
-            <select id="cancel-reason" value={reason} onChange={(e) => setReason(e.target.value)}>
-              <option value="">— Chọn lý do —</option>
-              <option>Thay đổi kế hoạch cá nhân</option>
-              <option>Lý do sức khỏe</option>
-              <option>Tìm được tour khác phù hợp hơn</option>
-              <option>Khác</option>
-            </select>
-          </div>
-          <div className="modal-actions">
-            <button value="cancel" className="btn btn-outline" autoFocus>Giữ lại đơn</button>
-            <button value="confirm" className="btn btn-danger">Xác nhận hủy</button>
-          </div>
-        </form>
-      </dialog>
-
-      {/* Hóa đơn VAT mô phỏng */}
-      {b.invoiceNo && (
-        <dialog ref={invoiceRef} className="modal invoice" aria-labelledby="inv-title" closedby="any">
-          <div className="watermark">HÓA ĐƠN MÔ PHỎNG – KHÔNG CÓ GIÁ TRỊ PHÁP LÝ</div>
-          <h2 id="inv-title">HÓA ĐƠN GIÁ TRỊ GIA TĂNG</h2>
-          <p className="center small">Ký hiệu: 1C26TVT · Số: <b>{b.invoiceNo}</b> · Ngày {new Date().toLocaleDateString('vi-VN')}</p>
-          <div className="inv-parties">
-            <div><b>Đơn vị bán:</b> CÔNG TY TNHH VIETTOUR<br />MST: 0312345678<br />190 Pasteur, Q.3, TP.HCM</div>
-            <div><b>Người mua:</b> {b.invoice.company}<br />MST: {b.invoice.taxCode}<br />{b.invoice.address}</div>
-          </div>
-          <table className="dep-table">
-            <thead><tr><th scope="col">Dịch vụ</th><th scope="col">Thành tiền trước thuế</th></tr></thead>
-            <tbody>
-              <tr><td>Tour {b.tourCode} – KH {fmtDate(b.departureDate)} ({b.passengers.length} khách)</td><td>{vnd(b.price.amountBeforeTax)}</td></tr>
-              <tr><td>Thuế suất GTGT 8%</td><td>{vnd(b.price.vatAmount)}</td></tr>
-              <tr><td><b>Tổng tiền thanh toán</b></td><td><b>{vnd(b.price.total)}</b></td></tr>
-            </tbody>
-          </table>
-          <p className="muted small">Mã tra cứu (mô phỏng): {b.invoiceNo.replace('INV-', 'TC')} · Gửi tới {b.invoice.email}</p>
-          <form method="dialog" className="modal-actions">
-            <button type="button" className="btn btn-outline" onClick={() => window.print()}><Printer size={16} /> In</button>
-            <button value="close" className="btn btn-primary" autoFocus>Đóng</button>
-          </form>
-        </dialog>
-      )}
     </div>
   );
 }

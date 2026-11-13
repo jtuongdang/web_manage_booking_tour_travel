@@ -1,11 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SlidersHorizontal } from 'lucide-react';
 import SearchBar from '../components/SearchBar';
 import TourCard from '../components/TourCard';
-import { categories, tours } from '../data/tours';
-
-const norm = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase();
+import { categories } from '../data/tours';
+import { toursApi } from '../api/toursApi';
 
 export default function Tours() {
   const [params, setParams] = useSearchParams();
@@ -16,27 +15,51 @@ export default function Tours() {
   const [maxPrice, setMaxPrice] = useState(35000000);
   const [duration, setDuration] = useState('all');
   const [sort, setSort] = useState('popular');
+  const [tours, setTours] = useState([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const request = {
+      keyword: q || undefined,
+      departureFrom: from || undefined,
+      departureDate: date || undefined,
+      maxPrice,
+      pageIndex: 1,
+      pageSize: 100,
+      scopeType: cat === 'domestic' ? 'Domestic' : cat === 'international' ? 'International' : undefined,
+      tags: !['all', 'domestic', 'international'].includes(cat) ? cat : undefined,
+    };
+    setLoading(true);
+    toursApi.list(request).then((result) => {
+      if (active) {
+        setTours(result.items);
+        setError('');
+      }
+    }).catch((requestError) => {
+      if (active) setError(requestError.message || 'Không thể tải danh sách tour.');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [q, from, date, cat, maxPrice]);
 
   const result = useMemo(() => {
     let list = tours.filter((t) => {
-      if (q && !norm(`${t.title} ${t.destination}`).includes(norm(q))) return false;
-      if (from && t.departureFrom !== from) return false;
-      if (cat !== 'all' && !t.tags.includes(cat)) return false;
-      if (t.price > maxPrice) return false;
       if (duration === 'short' && t.durationDays > 3) return false;
       if (duration === 'mid' && (t.durationDays < 4 || t.durationDays > 5)) return false;
       if (duration === 'long' && t.durationDays < 6) return false;
-      if (date && !t.departures.some((d) => d.departureDate >= date && d.available > 0)) return false;
       return true;
     });
     const sorters = {
-      popular: (a, b) => b.bookedCount - a.bookedCount,
+      popular: (a, b) => b.reviewCount - a.reviewCount,
       priceAsc: (a, b) => a.price - b.price,
       priceDesc: (a, b) => b.price - a.price,
       rating: (a, b) => b.rating - a.rating,
     };
     return [...list].sort(sorters[sort]);
-  }, [q, from, cat, maxPrice, duration, date, sort]);
+  }, [tours, duration, sort]);
 
   const setCat = (key) => {
     const p = new URLSearchParams(params);
@@ -82,9 +105,10 @@ export default function Tours() {
               </select>
             </label>
           </div>
-          {result.length ? (
+          {error && <p className="error-text" role="alert">Không thể tải tour từ API: {error}</p>}
+          {loading ? <p className="muted">Đang tải danh sách tour…</p> : result.length ? (
             <div className="tour-grid three">{result.map((t) => <TourCard key={t.id} tour={t} />)}</div>
-          ) : (
+          ) : !error && (
             <div className="empty">Không tìm thấy tour phù hợp. Hãy thử từ khóa hoặc bộ lọc khác.</div>
           )}
         </section>
