@@ -37,6 +37,7 @@ ORCH_DB_PATH = Path.home() / "Library/Application Support/com.jtuongdang.devagen
 LOG_FILE = REPO_PATH / "doc" / "SUPERVISOR_LIVE.log"
 HANDOFF_FILE = REPO_PATH / "doc" / "BIEN_BAN_BAN_GIAO_DU_AN.md"
 STATE_FILE = REPO_PATH / "doc" / ".supervisor_state.json"
+HOLD_FILE = REPO_PATH / "doc" / ".hold_before_finalize"
 
 SHARED_GUIDANCE = """
 QUY TẮC KIẾN TRÚC BẮT BUỘC TỪ TECH LEAD:
@@ -858,6 +859,11 @@ def main():
                 log(f"Tiến độ: {len(completed)}/{target_total} xong | Đang chạy: {len(running)} | Chờ: {len(queued)} | Còn: {max(0, remaining)/60.0:.1f} phút")
 
                 if len(completed) >= target_total:
+                    if HOLD_FILE.exists() and remaining > 180:
+                        log("10/10 tasks đã merge — tạm giữ theo cờ Tech Lead trước khi xuất biên bản & ngủ máy...")
+                        time.sleep(min(10, max(1, remaining - 180)))
+                        continue
+                    HOLD_FILE.unlink(missing_ok=True)
                     completion_reason = f"Hoàn thành xuất sắc 100% ({len(completed)}/{target_total} tasks) trước hạn 1 tiếng"
                     log(completion_reason)
                     break
@@ -900,6 +906,8 @@ def main():
         api_smoke = verify_api_smoke() if val_ok else "Skipped (validation build failed)"
         elapsed_min = (time.time() - start_time) / 60.0
 
+        HOLD_FILE.unlink(missing_ok=True)
+        STATE_FILE.unlink(missing_ok=True)
         write_handoff_report(tour_final, completion_reason, elapsed_min, val_ok, val_out, api_smoke)
         git_commit_and_push(completion_reason)
     finally:

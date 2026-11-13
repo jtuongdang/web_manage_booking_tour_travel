@@ -109,8 +109,8 @@ public sealed class DeparturesController(AppDbContext db, DepartureService servi
                           join p in db.BookingPassengers.AsNoTracking() on b.Id equals p.BookingId
                           where b.DepartureId == id && (b.Status == "PendingPayment" || b.Status == "DepositPaid" || b.Status == "Confirmed" || b.Status == "FinalPaymentOverdue")
                           orderby b.BookingCode, p.Id
-                          select new { b.Id, b.BookingCode, b.Status, p.PaxType, p.FullName, p.IdentityNumber, p.Nationality, p.CheckInStatus }).ToListAsync(ct);
-        return Ok(rows.Select(p => new ManifestPassenger(p.Id, p.BookingCode, p.Status, p.PaxType, p.FullName,
+                          select new { PassengerId = p.Id, BookingId = b.Id, b.BookingCode, b.Status, p.PaxType, p.FullName, p.IdentityNumber, p.Nationality, p.CheckInStatus }).ToListAsync(ct);
+        return Ok(rows.Select(p => new ManifestPassenger(p.PassengerId, p.BookingId, p.BookingCode, p.Status, p.PaxType, p.FullName,
             privileged ? p.IdentityNumber : DepartureValidation.MaskIdentity(p.IdentityNumber), p.Nationality, p.CheckInStatus)));
     }
 

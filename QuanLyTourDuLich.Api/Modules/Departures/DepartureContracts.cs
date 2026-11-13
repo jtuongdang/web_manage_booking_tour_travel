@@ -27,7 +27,7 @@ public sealed class DepartureWriteRequest
 }
 
 public sealed record DepartureStatusRequest([Required] string Status);
-public sealed record ManifestPassenger(long BookingId, string BookingCode, string BookingStatus, string PaxType,
+public sealed record ManifestPassenger(long PassengerId, long BookingId, string BookingCode, string BookingStatus, string PaxType,
     string FullName, string? IdentityNumber, string? Nationality, string? CheckInStatus);
 
 public static class DepartureValidation
