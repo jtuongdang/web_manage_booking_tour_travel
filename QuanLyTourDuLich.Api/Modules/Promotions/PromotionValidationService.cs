@@ -13,7 +13,7 @@ public interface IPromotionValidationService
 public sealed record ValidatePromotionRequest(
     string Code,
     int TourId,
-    int CustomerId,
+    int? CustomerId,
     decimal OrderAmount,
     int PaxCount,
     DateTime? At = null);
@@ -39,9 +39,11 @@ public sealed class PromotionValidationService(AppDbContext db) : IPromotionVali
 
         var appliesToTour = promotion.ApplyAllTours || await db.PromotionTours.AsNoTracking()
             .AnyAsync(pt => pt.PromotionId == promotion.Id && pt.TourId == request.TourId, cancellationToken);
-        var usageCount = await db.PromotionUsages.AsNoTracking()
-            .CountAsync(u => u.PromotionId == promotion.Id && u.CustomerId == request.CustomerId &&
-                (u.Status == "Reserved" || u.Status == "Redeemed"), cancellationToken);
+        var usageCount = request.CustomerId is > 0
+            ? await db.PromotionUsages.AsNoTracking()
+                .CountAsync(u => u.PromotionId == promotion.Id && u.CustomerId == request.CustomerId.Value &&
+                    (u.Status == "Reserved" || u.Status == "Redeemed"), cancellationToken)
+            : 0;
 
         return Evaluate(promotion, request, DateTime.UtcNow, appliesToTour, usageCount);
     }
