@@ -1,13 +1,13 @@
 # BIÊN BẢN BÀN GIAO DỰ ÁN PHẦN MỀM
 ## HỆ THỐNG QUẢN LÝ & ĐẶT TOUR DU LỊCH DOANH NGHIỆP (QUANLYTOURDULICH)
 
-- **Thời điểm xuất biên bản:** `2026-11-13 19:51:00`
+- **Thời điểm xuất biên bản:** `2026-11-13 20:40` (cập nhật sau bước E2E verification trên SQL Server thật)
 - **Lý do kết thúc phiên điều phối:** Hoàn thành xuất sắc 100% (10/10 tasks) trước hạn 1 tiếng
 - **Tổng thời gian vận hành phiên:** `17.1 phút`
-- **Commit mới nhất trên nhánh `main`:** `5c9b6c9`
-- **Kết quả kiểm tra `scripts/validate.py`:** `PASS (0 lỗi)`
-- **Kết quả `dotnet test`:** `Passed!  - Failed:     0, Passed:    69, Skipped:     0, Total:    69, Duration: 509 ms - QuanLyTourDuLich.Tests.dll (net10.0)`
-- **Kiểm tra khởi chạy Live API (`/api/v1/health`):** `HTTP 200 OK ({"status":"healthy","service":"QuanLyTourDuLich.Api","utcNow":"2026-11-13T12:51:00.302925Z"})`
+- **Commit mới nhất trên nhánh `main` (khi chạy supervisor):** `5c9b6c9` -> `41a9992` (và bản vá E2E cuối cùng kế tiếp trên `main`)
+- **Kết quả kiểm tra `scripts/validate.py`:** `PASS (0 lỗi build, oxlint 0 errors / 27 warnings, vite built)`
+- **Kết quả `dotnet test`:** `70 passed, 0 failed, 0 skipped` (`QuanLyTourDuLich.Tests.dll (net10.0)`)
+- **Kiểm tra khởi chạy Live API (`/api/v1/health` & E2E SQL Server):** `18/18` GET endpoints của Portal trả `HTTP 200 OK` (6 roles đăng nhập JWT hợp lệ) + luồng E2E thật (`POST /api/v1/bookings` -> `POST /api/v1/payments/qr-create` -> `qr-simulate-demo` -> `GET /api/v1/bookings/{code}` -> `GET /api/v1/departures/{id}/manifest` -> `PATCH checkin` -> `cancel-request` -> `approve-cancel` -> `GET /api/v1/bookings/my` -> `GET /api/v1/ledger` -> `GET /api/v1/refunds`) **PASS** sau khi vá EF Core LINQ translation ở `BookingsController.cs` và null-safe JSON parsing ở `FinanceRules.cs`.
 
 ---
 

@@ -56,7 +56,7 @@ public static class FinanceRules
 
     private static bool TryGetDecimal(JsonElement element, string name, out decimal value)
     {
-        if (element.TryGetProperty(name, out var property) && property.TryGetDecimal(out value)) return true;
+        if (element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number && property.TryGetDecimal(out value)) return true;
         value = 0m;
         return false;
     }
@@ -73,7 +73,7 @@ public static class FinanceRules
     private static int? GetNullableInt(JsonElement element, params string[] names)
     {
         foreach (var name in names)
-            if (element.TryGetProperty(name, out var property) && property.TryGetInt32(out var value)) return value;
+            if (element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value)) return value;
         return null;
     }
 }

@@ -44,4 +44,18 @@ public sealed class FinanceRulesTests
 
         Assert.Equal(250_000m, penalty);
     }
+
+    [Fact]
+    public void Reads_matching_percent_when_max_days_is_null()
+    {
+        var booking = new Bookings
+        {
+            TotalAmount = 2_000_000m,
+            CancellationPolicySnapshotJson = """{"rules":[{"minDaysBeforeDeparture":0,"maxDaysBeforeDeparture":6,"penaltyPercent":80},{"minDaysBeforeDeparture":15,"maxDaysBeforeDeparture":null,"penaltyPercent":10}]}"""
+        };
+
+        var penalty = FinanceRules.CalculatePenaltyFromSnapshot(booking, new DateOnly(2026, 12, 25), new DateTime(2026, 12, 01));
+
+        Assert.Equal(200_000m, penalty);
+    }
 }

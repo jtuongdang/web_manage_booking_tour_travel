@@ -30,12 +30,11 @@ public sealed class BookingsController(AppDbContext db, BookingService bookings,
     [HttpGet("my"), Authorize(Roles = RoleCodes.Customer)]
     public async Task<ActionResult<IReadOnlyList<BookingListItemDto>>> Mine(CancellationToken ct)
     {
-        var items = await BuildListQuery()
+        var rows = await BuildListQuery()
             .Where(x => x.Booking.CustomerId == current.CustomerId)
             .OrderByDescending(x => x.Booking.CreatedAt)
-            .Select(x => ProjectListItem(x.Booking, x.TourTitle, x.TourCode, x.DepartureCode, x.DepartureDate))
             .ToListAsync(ct);
-        return Ok(items);
+        return Ok(rows.Select(x => ProjectListItem(x.Booking, x.TourTitle, x.TourCode, x.DepartureCode, x.DepartureDate)).ToArray());
     }
 
     [HttpGet, Authorize(Roles = RoleCodes.Sales + "," + RoleCodes.Operator + "," + RoleCodes.Accountant + "," + RoleCodes.Admin)]
@@ -49,11 +48,11 @@ public sealed class BookingsController(AppDbContext db, BookingService bookings,
             query = query.Where(x => x.Booking.BookingCode.Contains(s) || x.Booking.ContactName.Contains(s) || x.Booking.ContactPhone.Contains(s) || x.Booking.ContactEmail.Contains(s));
         }
         var count = await query.CountAsync(ct);
-        var items = await query.OrderByDescending(x => x.Booking.CreatedAt)
+        var rows = await query.OrderByDescending(x => x.Booking.CreatedAt)
             .Skip((page.NormalizedPageIndex - 1) * page.NormalizedPageSize)
             .Take(page.NormalizedPageSize)
-            .Select(x => ProjectListItem(x.Booking, x.TourTitle, x.TourCode, x.DepartureCode, x.DepartureDate))
             .ToListAsync(ct);
+        var items = rows.Select(x => ProjectListItem(x.Booking, x.TourTitle, x.TourCode, x.DepartureCode, x.DepartureDate)).ToArray();
         return Ok(new PagedResult<BookingListItemDto>(items, page.NormalizedPageIndex, page.NormalizedPageSize, count));
     }
 
@@ -83,13 +82,27 @@ public sealed class BookingsController(AppDbContext db, BookingService bookings,
         await db.SaveChangesAsync(ct); await audit.WriteAsync("UpdatePassengers", "Bookings", id.ToString(), old.Count, passengers.Count, current.UserId, cancellationToken: ct); await tx.CommitAsync(ct); return NoContent();
     }
 
-    private sealed record BookingProjection(Bookings Booking, string TourTitle, string TourCode, string DepartureCode, DateOnly DepartureDate);
+    private sealed class BookingProjection
+    {
+        public required Bookings Booking { get; init; }
+        public required string TourTitle { get; init; }
+        public required string TourCode { get; init; }
+        public required string DepartureCode { get; init; }
+        public required DateOnly DepartureDate { get; init; }
+    }
 
     private IQueryable<BookingProjection> BuildListQuery() =>
         from b in db.Bookings.AsNoTracking()
         join d in db.TourDepartures.AsNoTracking() on b.DepartureId equals d.Id
         join t in db.Tours.AsNoTracking() on b.TourId equals t.Id
-        select new BookingProjection(b, t.Title, t.Code, d.DepartureCode, d.DepartureDate);
+        select new BookingProjection
+        {
+            Booking = b,
+            TourTitle = t.Title,
+            TourCode = t.Code,
+            DepartureCode = d.DepartureCode,
+            DepartureDate = d.DepartureDate
+        };
 
     private static BookingListItemDto ProjectListItem(Bookings b, string tourTitle, string tourCode, string departureCode, DateOnly departureDate) =>
         new(b.Id, b.BookingCode, b.TourId, b.DepartureId, b.CustomerId, b.CreatedByUserId, b.SalesUserId, b.BookingChannel,
