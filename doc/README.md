@@ -4,11 +4,11 @@
 
 Hệ thống **Manage Booking Tour Travel** được thiết kế để trở thành nền tảng vận hành cốt lõi cho doanh nghiệp lữ hành (Inbound/Outbound/Nội địa), kết nối xuyên suốt từ **kênh bán hàng (B2C Web/App & Sales nội bộ)** đến **điều hành tour**, **hướng dẫn viên**, **kế toán** và **ban lãnh đạo**.
 
-Mục tiêu khi đưa vào vận hành thực tế:
-- **Chống bán lố chỗ (Zero Overbooking):** Kiểm soát chặt chẽ số chỗ khả dụng theo thời gian thực với cơ chế giữ chỗ tạm (Hold Slot) có thời hạn.
-- **Minh bạch tài chính & công nợ:** Theo dõi rõ ràng đặt cọc, thanh toán phần còn lại, hoàn/hủy, chiết khấu, chi phí điều hành và lợi nhuận gộp từng đoàn.
-- **Chuẩn hóa quy trình vận hành:** Từ lúc tạo tour -> mở lịch khởi hành -> khách đặt -> thanh toán -> chốt đoàn -> đi tour -> hậu mãi.
-- **Dễ mở rộng & tích hợp:** Xây dựng trên kiến trúc **ASP.NET Core 10 Web API** (RESTful, Modular Monolith hoặc Clean Architecture), sẵn sàng tích hợp cổng thanh toán thật và hóa đơn điện tử thật ở giai đoạn sau.
+Mục tiêu khi đưa vào vận hành thực tế (Single-Tenant Enterprise — 1 doanh nghiệp vận hành trực tiếp):
+- **Chống bán lố chỗ (Zero Overbooking):** Kiểm soát chặt chẽ số chỗ khả dụng theo thời gian thực với cơ chế giữ chỗ tạm (Hold Slot) có thời hạn và khóa lạc quan `RowVersion` trên SQL Server.
+- **Minh bạch tài chính, công nợ & đối soát nội bộ:** Theo dõi rõ ràng đặt cọc, thanh toán phần còn lại, hoàn/hủy, chiết khấu, chi phí nhà cung cấp, chi phí phát sinh, đối soát sao kê ngân hàng và lợi nhuận gộp từng đoàn trước khi khóa sổ quyết toán.
+- **Chuẩn hóa quy trình vận hành:** Từ lúc tạo tour -> mở lịch khởi hành -> khách đặt (B2C hoặc Sales đặt hộ) -> thanh toán QR/đối soát -> chốt đoàn -> đi tour -> hậu mãi & quyết toán.
+- **Dễ mở rộng & tích hợp:** Xây dựng trên kiến trúc **ASP.NET Core 10 Web API** (Modular Monolith) + **SQL Server 2022**, sẵn sàng cắm cổng thanh toán thật (`IPaymentGateway`) và hóa đơn điện tử thật (`ITaxInvoiceService`) ở giai đoạn sau.
 
 ---
 
@@ -37,10 +37,12 @@ Theo định hướng triển khai thực tế của doanh nghiệp ở giai đo
 5. [05-nghiep-vu-dieu-hanh-tour-va-hau-mai.md](./05-nghiep-vu-dieu-hanh-tour-va-hau-mai.md) — Điều hành đoàn, Phân công HDV, Check-in, Chi phí phát sinh, CSKH, Review & Báo cáo KPI.
 6. [06-thiet-ke-du-lieu-va-api-contracts.md](./06-thiet-ke-du-lieu-va-api-contracts.md) — Mô hình ERD cốt lõi, Thiết kế nhóm API cho ASP.NET 10 Web API & Yêu cầu phi chức năng.
 7. [07-tham-khao-giao-dien.md](./07-tham-khao-giao-dien.md) — Nguồn tham khảo giao diện (Klook, GetYourGuide, Traveloka, Vietravel) & danh sách trang khách hàng đã dựng.
+8. [08-thiet-ke-csdl-sqlserver.md](./08-thiet-ke-csdl-sqlserver.md) — Thiết kế CSDL vật lý SQL Server 2022 (33 bảng, khóa ngoại, ràng buộc toàn vẹn, chỉ mục và kịch bản chạy trên Docker).
+9. [09-ke-hoach-hop-dong-va-phan-ra-task-devagent.md](./09-ke-hoach-hop-dong-va-phan-ra-task-devagent.md) — Kế hoạch 5 Hợp đồng (`CONTRACT-01`..`CONTRACT-05`) & lộ trình phân task song song trên DevAgent Orchestrator.
 
 ---
 
-## 4. Kiến trúc hệ thống đề xuất (ASP.NET 10 Web API)
+## 4. Kiến trúc hệ thống đề xuất (ASP.NET 10 Web API + SQL Server 2022)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -54,11 +56,11 @@ Theo định hướng triển khai thực tế của doanh nghiệp ở giai đo
 │   JWT Auth & RBAC  │  Rate Limiting  │  Global Exception  │ OpenAPI  │
 ├──────────────────────────────────────────────────────────────────────┤
 │                        MODULAR BUSINESS CORE                         │
-│  [Identity]  [Tour & Pricing]  [Booking & Hold]  [Operations]        │
-│  [Payment QR Simulator]  [Tax & Invoice Simulator]  [Reporting]      │
+│  [Identity & CRM]  [Tour & Pricing]  [Booking & Hold]  [Operations]  │
+│  [Payment QR Sim & Reconciliation] [Tax/Invoice Sim] [Ledger & KPI]  │
 ├──────────────────────────────────────────────────────────────────────┤
 │                     INFRASTRUCTURE & DATA LAYER                      │
-│  EF Core / Dapper  │  SQL Server / PostgreSQL  │  Redis (Hold Lock)  │
-│  Background Worker (Release Expired Holds, Reminder Notifications)   │
+│  EF Core 10 (+ Dapper Reporting)  │  SQL Server 2022 (RowVersion)   │
+│  Background Worker (Nhả chỗ hết hạn, Cảnh báo quá hạn cọc/khởi hành) │
 └──────────────────────────────────────────────────────────────────────┘
 ```

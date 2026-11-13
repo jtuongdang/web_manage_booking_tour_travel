@@ -26,17 +26,23 @@ Ký hiệu: **C** (Tạo), **R** (Xem), **U** (Sửa), **D** (Xóa/Vô hiệu h�
 | **Bảng giá & Chính sách hủy** | R | R | C/R/U | - | R/U | C/R/U/D |
 | **Lịch khởi hành & Quota chỗ** | R | R | C/R/U/D | R (Assigned) | R | C/R/U/D |
 | **Nhà cung cấp (KS, Xe, Vé)** | - | R | C/R/U/D | R (Assigned) | R | C/R/U/D |
-| **Đặt Tour (Booking)** | C/R (Của mình) | C/R/U (Tất cả) | R | - | R | C/R/U |
-| **Yêu cầu Hủy / Đổi Tour** | C/R (Của mình) | C/R/A (Theo cấp) | R/A (Đổi lịch) | - | A (Hoàn tiền) | A |
+| **Đặt Tour (Booking) & Điều chỉnh khách** | C/R (Của mình) | C/R/U (Tất cả) | R | - | R | C/R/U |
+| **Yêu cầu Hủy / Đổi lịch (Booking)** | C/R (Của mình) | C/R/A (Duyệt hủy/đổi, chốt phí) | R/A (Đổi lịch / Xác nhận) | - | R | A |
 | **Mã khuyến mãi / Voucher** | R (Áp dụng) | R (Áp dụng) | - | - | R | C/R/U/D |
-| **Thanh toán QR & Giao dịch** | C/R (Của mình) | C/R | - | - | R/U/A (Đối soát) | R |
-| **Hoàn tiền (Refund) & Phiếu chi** | R (Của mình) | C (Đề xuất) | - | - | C/R/A | A |
+| **Thanh toán QR, Tiền mặt & Đối soát** | C/R (Của mình) | C/R (Thu hộ/tạo QR) | - | - | R/U/A (Đối soát `BankRef`) | R |
+| **Hoàn tiền (Refund) & Sổ quỹ Thu/Chi** | R (Của mình) | C (Đề xuất) | - | - | C/R/A (Duyệt chi hoàn) | A |
+| **Công nợ NCC & Quyết toán Khóa sổ đoàn** | - | - | C/R/U (Chi phí đoàn) | C/R (Chi phí phát sinh) | R/U/A (Chi NCC & Khóa sổ `Settled`) | A (Mở khóa sau quyết toán) |
 | **Thuế & Hóa đơn (Mô phỏng)** | R (Tải hóa đơn) | R | - | - | C/R/U | R |
-| **Chốt đoàn & Phân công HDV** | - | R | C/R/U/A | R (Của mình) | R | C/R/U/A |
-| **Check-in & Sự cố trên Tour** | - | R | R/U | C/R/U (Của mình) | R (Chi phí) | R |
-| **Đánh giá (Review) & CSKH** | C/R | R/U (Phản hồi) | R | R | - | R/D (Ẩn spam) |
+| **Chốt đoàn & Phân công HDV (Nhiều HDV)** | - | R | C/R/U/A | R (Của mình) | R | C/R/U/A |
+| **Check-in & Sự cố trên Tour** | - | R | R/U | C/R/U (Của mình) | R (Chi phí) | C/R/U |
+| **Đánh giá (Review) & CRM Khách hàng** | C/R | C/R/U (Hồ sơ khách, phản hồi) | R | R | R | R/D (Ẩn spam) |
 | **Báo cáo Doanh thu / Lợi nhuận** | - | R (Cá nhân) | R (Vận hành) | - | R (Tài chính) | R (Toàn bộ) |
-| **Audit Log hệ thống** | - | - | - | - | R (Tài chính) | R |
+| **Cấu hình hệ thống & Audit Log** | - | - | - | - | R (Audit tài chính) | C/R/U |
+
+### 2.1. Quy tắc tách biệt Hồ sơ Khách hàng (`Customer`) và Tài khoản (`User`)
+- **Hồ sơ Khách hàng (`Customers`):** Lưu thông tin CRM (họ tên, SĐT, email, nguồn khách, hạng thành viên, tổng chi tiêu). Cho phép `SALES` tạo booking ngay cho khách vãng lai/Zalo/Hotline mà khách chưa cần có tài khoản đăng nhập.
+- **Tài khoản (`Users`):** Lưu thông tin đăng nhập (Email/SĐT, `PasswordHash`, `RefreshToken`, vai trò RBAC). Khi khách hàng đăng ký tài khoản web bằng cùng SĐT/Email đã từng đặt qua `SALES`, hệ thống liên kết vào hồ sơ `Customer` hiện có để đồng bộ lịch sử booking.
+- **Tách quyền Hủy đơn vs Duyệt chi hoàn tiền:** `SALES` hoặc `OPERATOR` xác nhận hủy booking và chốt mức phí phạt theo snapshot chính sách; chỉ `ACCOUNTANT` hoặc `ADMIN` mới có quyền phê duyệt chi hoàn tiền (`RefundRequests`) và khóa sổ quyết toán đoàn (`Settled`).
 
 ---
 

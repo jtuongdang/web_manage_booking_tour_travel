@@ -13,17 +13,17 @@ Hệ thống hỗ trợ 2 kênh tạo booking nhưng dùng chung một lõi xử
 Đây là nghiệp vụ sống còn khi vận hành thực tế:
 
 1. **Kiểm tra & Khóa đồng thời (Concurrency Control):**
-   - Khi có yêu cầu đặt $N$ chỗ (`Adult + Child`, thường `Infant` không chiếm ghế xe/máy bay nhưng vẫn kiểm soát giới hạn an toàn nếu cần), hệ thống thực hiện giao dịch nguyên tử (Database Transaction với Optimistic Concurrency / RowVersion hoặc Pessimistic Lock / Distributed Lock theo `DepartureId`).
-   - Điều kiện thành công: `AvailableSlots >= N` và Lịch khởi hành đang ở trạng thái `Open` và chưa quá `CutoffDate`.
-2. **Giữ chỗ tạm (Hold Slot với TTL):**
+   - Khi có yêu cầu đặt $N = \text{Adult} + \text{Child}$ chỗ (`SeatsRequired`), hệ thống thực hiện giao dịch nguyên tử (Database Transaction với Optimistic Concurrency `RowVersion` trên `TourDepartures`). `Infant` (em bé dưới 2 tuổi) không trừ vào `AvailableSlots` ghế chuẩn nhưng vẫn ghi nhận vào `Manifest` và kiểm soát giới hạn an toàn (`InfantCount <= AdultCount` hoặc cấu hình đoàn).
+   - Điều kiện thành công: `AvailableSlots >= N`, `TourDeparture.Status == Open`, `Tour.Status == Published` (hoặc đặt nội bộ bởi `SALES` với tour `IsPublic = false`), và chưa quá `CutoffAt`.
+2. **Giữ chỗ tạm (Hold Slot với TTL) & Hạn thanh toán phần còn lại:**
    - Ngay khi tạo Booking ở trạng thái `PendingPayment`:
-     - `HeldSlots += N`
-     - `AvailableSlots -= N`
-     - Gán `HoldExpiresAt = Now + 15 phút` (hoặc cấu hình linh hoạt cho Sales giữ chỗ lâu hơn, VD: 2 giờ cho khách đoàn/chuyển khoản).
-3. **Tự động nhả chỗ khi hết hạn (Background Job / Worker):**
-   - Một Background Service chạy định kỳ (VD: mỗi 30 giây – 1 phút) quét các Booking có `Status == PendingPayment` và `HoldExpiresAt < Now`.
-   - Hệ thống tự động chuyển Booking sang `Expired`, đồng thời hoàn trả `HeldSlots -= N` và `AvailableSlots += N` (nếu đoàn đang `Full` sẽ tự mở lại `Open`).
-   - Nếu khách thanh toán thành công trước khi hết hạn: chuyển `HeldSlots -= N` sang `BookedSlots += N`, Booking chuyển sang `DepositPaid` hoặc `Confirmed`.
+     - `HeldSlots += N` (tương ứng `AvailableSlots = TotalCapacity - HeldSlots - BookedSlots` tự động giảm).
+     - Gán `HoldExpiresAt = UtcNow + 15 phút` cho B2C (hoặc cấu hình linh hoạt cho `SALES`, VD: 120 phút khi khách chuyển khoản qua Zalo/tại quầy).
+   - Khi khách chọn đặt cọc (`DepositPaid`), hệ thống ghi nhận `FinalPaymentDueAt = DepartureDate - X ngày` (mặc định 5 ngày trước khởi hành, lấy từ `SystemSettings`).
+3. **Tự động nhả chỗ & Cảnh báo quá hạn phần còn lại (Background Worker):**
+   - Job chạy định kỳ (30–60 giây) quét Booking `PendingPayment` có `HoldExpiresAt < UtcNow` $\rightarrow$ chuyển `Expired`, hoàn `HeldSlots -= N` (nếu đoàn đang `Full` sẽ tự mở lại `Open`) và hoàn lượt dùng khuyến mãi (`PromotionUsages`).
+   - Job nhắc nợ hàng ngày: với Booking `DepositPaid` quá `FinalPaymentDueAt` mà chưa thanh toán đủ $\rightarrow$ chuyển sang trạng thái cảnh báo `FinalPaymentOverdue` và gửi thông báo cho `SALES` / `OPERATOR` / `ACCOUNTANT` xử lý liên hệ khách hoặc hủy đơn theo quy định (**không tự động hủy mất cọc của khách một cách âm thầm**).
+   - Nếu khách thanh toán thành công từ `PendingPayment`: chuyển `HeldSlots -= N` sang `BookedSlots += N`, Booking sang `DepositPaid` hoặc `Confirmed`.
 
 ---
 
@@ -64,11 +64,14 @@ stateDiagram-v2
     PendingPayment --> Confirmed: Thanh toán đủ 100%
 
     DepositPaid --> Confirmed: Thanh toán phần còn lại
+    DepositPaid --> FinalPaymentOverdue: Quá hạn thanh toán trước ngày đi
+    FinalPaymentOverdue --> Confirmed: Thanh toán phần còn lại
+    FinalPaymentOverdue --> CancellationRequested: Sales/Điều hành lập hủy do quá hạn
     DepositPaid --> CancellationRequested: Khách yêu cầu hủy
     Confirmed --> CancellationRequested: Khách yêu cầu hủy
 
-    CancellationRequested --> Cancelled: Duyệt hủy (Tính phí phạt)
-    Cancelled --> Refunded: Kế toán hoàn tiền xong (nếu có)
+    CancellationRequested --> Cancelled: Sales/Điều hành duyệt hủy & chốt phí phạt
+    Cancelled --> Refunded: Kế toán duyệt & hoàn tiền xong (nếu có)
 
     Confirmed --> InProgress: Đoàn bắt đầu khởi hành
     InProgress --> Completed: Đoàn kết thúc tour
@@ -76,11 +79,13 @@ stateDiagram-v2
 
 ---
 
-## 6. Nghiệp vụ Đổi Tour / Đổi Ngày Khởi Hành & Chuyển Nhượng
+## 6. Nghiệp vụ Đổi Tour / Đổi Ngày, Thêm–Bớt Khách & Chuyển Nhượng
 
-- **Đổi ngày khởi hành (Reschedule):**
+- **Đổi ngày khởi hành (Reschedule — bảng `BookingReschedules`):**
   - Khách muốn dời sang ngày khác của cùng Tour (hoặc sang Tour khác).
   - Hệ thống kiểm tra chính sách đổi (VD: trước 7 ngày được đổi 1 lần miễn phí hoặc thu phí đổi).
-  - Xử lý nguyên tử: Giữ chỗ ở `Departure` mới $\rightarrow$ Nhả chỗ ở `Departure` cũ $\rightarrow$ Tính chênh lệch giá (nếu ngày mới giá cao hơn thì thu thêm; thấp hơn thì bảo lưu hoặc hoàn theo chính sách) $\rightarrow$ Ghi nhận lịch sử đổi.
+  - Xử lý nguyên tử: Giữ chỗ ở `Departure` mới $\rightarrow$ Nhả chỗ ở `Departure` cũ $\rightarrow$ Tính chênh lệch giá + phí đổi (nếu ngày mới giá cao hơn thì thu thêm; thấp hơn thì ghi nhận vào `CreditAmount` hoặc hoàn chênh lệch) $\rightarrow$ Lưu lịch sử vào `BookingReschedules`.
+- **Điều chỉnh số lượng hành khách (trước `CutoffAt`):**
+  - Cho phép `SALES`/`OPERATOR` thêm hoặc bớt khách trên Booking chưa khởi hành (`PendingPayment` / `DepositPaid` / `Confirmed`), cập nhật nguyên tử `BookedSlots` / `HeldSlots` trên `TourDeparture`, tính lại `TotalAmount` / `RemainingAmount` và ghi Audit Log.
 - **Chuyển nhượng vé (Transfer Passenger):**
   - Cho phép đổi tên hành khách đi thay trước ngày chốt đoàn (nếu không dính vé máy bay định danh không hoàn đổi), có thể cấu hình thu phí hành chính hoặc miễn phí.

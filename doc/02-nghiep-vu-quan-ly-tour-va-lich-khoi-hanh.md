@@ -4,10 +4,11 @@
 
 Một Tour trong hệ thống đại diện cho sản phẩm du lịch chuẩn hóa, gồm các thông tin bắt buộc:
 
-- **Thông tin định danh:** Mã Tour (duy nhất, VD: `DL-PQ-3N2D`), Tên Tour, Slug URL, Loại hình tour:
-  - `GroupTour` (Tour ghép đoàn theo lịch cố định).
+- **Thông tin định danh:** Mã Tour (duy nhất, VD: `DL-PQ-3N2D`), Tên Tour, Slug URL, cờ hiển thị công khai `IsPublic` (cho phép ẩn tour thiết kế riêng/đoàn doanh nghiệp khỏi trang bán lẻ B2C), Loại hình tour:
+  - `GroupTour` (Tour ghép đoàn theo lịch cố định, thường `IsPublic = true`).
   - `PrivateTour` (Tour riêng theo nhóm/gia đình).
-  - `CustomTour` (Tour thiết kế theo yêu cầu doanh nghiệp/đoàn thể).
+  - `CustomTour` (Tour thiết kế riêng theo hợp đồng doanh nghiệp/đoàn thể, thường `IsPublic = false`, gắn mã hợp đồng/đoàn).
+- **Chính sách mặc định:** Gắn `CancellationPolicyId` mặc định của Tour (có thể ghi đè theo từng `TourDeparture`) và % giá trẻ em / giá em bé / phụ thu phòng đơn.
 - **Thông tin địa lý & thời lượng:** Điểm khởi hành (VD: TP.HCM, Hà Nội), Điểm đến (có thể nhiều điểm), Số ngày / Số đêm (VD: 3 ngày 2 đêm), Phương tiện chính (Máy bay, Xe giường nằm, Tàu hỏa).
 - **Lịch trình chi tiết theo ngày (Itinerary):**
   - Ngày thứ $N$: Tiêu đề chặng, Mô tả hoạt động (Sáng / Trưa / Chiều / Tối), Bữa ăn bao gồm (Sáng/Trưa/Tối), Khách sạn dự kiến, Điểm tham quan.
@@ -59,27 +60,32 @@ Mỗi `TourDeparture` quản lý 4 chỉ số nguyên không âm:
   - `Confirmed` / `ClosedForSale`: Đã chốt đoàn chuẩn bị khởi hành.
   - `InProgress`: Đoàn đang đi tour.
   - `Completed`: Đoàn đã kết thúc tour.
+  - `Settled`: Kế toán đã đối soát, quyết toán công nợ NCC/chi phí phát sinh và khóa sổ đoàn (không cho chỉnh sửa dữ liệu tài chính trừ khi `ADMIN` mở khóa có Audit Log).
   - `Cancelled`: Hủy lịch khởi hành (kích hoạt quy trình chuyển lịch hoặc hoàn tiền toàn bộ khách đã đặt).
+- **Cấu hình hiển thị & vận hành bổ sung:** `IsPublic` (cho phép ẩn lịch đoàn riêng/doanh nghiệp khỏi B2C) và `CancellationPolicyId` (tùy chọn ghi đè chính sách hủy mặc định của Tour).
 
 ---
 
 ## 4. Chính sách Hoàn / Hủy / Đổi lịch (Cancellation Policy)
 
-Mỗi Tour hoặc từng đợt khởi hành gắn với một bộ quy tắc tính phí phạt minh bạch theo số ngày trước ngày khởi hành (`DaysBeforeDeparture`):
+Mỗi Tour (hoặc ghi đè ở từng `TourDeparture`) gắn với một bộ quy tắc `CancellationPolicy` gồm nhiều bậc theo số ngày trước ngày khởi hành (`MinDaysBeforeDeparture`):
 
 Ví dụ bộ quy tắc chuẩn:
 - Hủy trước $\ge 15$ ngày: Phí hủy **10%** tổng giá trị booking (hoặc miễn phí nếu là chính sách linh hoạt).
 - Hủy từ $7$ đến $14$ ngày: Phí hủy **30%**.
 - Hủy từ $3$ đến $6$ ngày: Phí hủy **50%**.
 - Hủy dưới $3$ ngày hoặc No-show (không có mặt): Phí hủy **100%**.
+- **Quy tắc bất biến (Policy Snapshot):** Khi khách tạo Booking, hệ thống **lưu ảnh chụp chính sách hủy (`CancellationPolicySnapshotJson`)** tại thời điểm đặt để tránh tranh chấp nếu công ty điều chỉnh biểu phí sau đó.
 - **Ngoại lệ bất khả kháng / Lỗi từ công ty (hủy đoàn do không đủ khách):** Hoàn **100%** hoặc cho phép đổi sang ngày khởi hành khác không mất phí.
 
 ---
 
-## 5. Quản lý Nhà cung cấp & Dịch vụ đầu vào (Suppliers)
+## 5. Quản lý Nhà cung cấp, Dịch vụ đầu vào & Công nợ NCC (Suppliers)
 
-Để vận hành thực tế và tính được **lợi nhuận thực (Gross Profit)** của từng đoàn, Điều hành cần quản lý:
-- **Danh mục Nhà cung cấp (`Supplier`):** Tên đơn vị, Loại hình (Khách sạn, Nhà xe, Hãng bay, Nhà hàng, Vé tham quan), Người liên hệ, SĐT/Email, Thông tin tài khoản thanh toán, Đánh giá nội bộ.
-- **Gán dịch vụ vào Lịch khởi hành (`DepartureService`):**
-  - Đoàn ngày `20/12/2026` đặt: 15 phòng tại Khách sạn X (đơn giá), 1 xe 35 chỗ của Nhà xe Y (đơn giá), 30 suất ăn tại Nhà hàng Z.
-  - Tổng chi phí đầu vào này là cơ sở để Kế toán đối chiếu công nợ nhà cung cấp và tính **Biên lợi nhuận = Doanh thu thu từ khách - Tổng chi phí nhà cung cấp - Hoa hồng/Chi phí khác**.
+Để vận hành thực tế và tính được **lợi nhuận thực (Gross Profit)** của từng đoàn, Điều hành và Kế toán phối hợp quản lý:
+- **Danh mục Nhà cung cấp (`Suppliers`):** Tên đơn vị, Loại hình (Khách sạn, Nhà xe, Hãng bay, Nhà hàng, Vé tham quan), Mã số thuế, Người liên hệ, SĐT/Email, Thông tin tài khoản thanh toán, Đánh giá nội bộ.
+- **Gán dịch vụ vào Lịch khởi hành (`DepartureServices`):**
+  - Đoàn ngày `20/12/2026` đặt: 15 phòng tại Khách sạn X (`Quantity * UnitPrice = EstimatedCost`), 1 xe 35 chỗ của Nhà xe Y, 30 suất ăn tại Nhà hàng Z.
+  - Theo dõi chi phí dự kiến (`EstimatedCost`), chi phí thực tế nghiệm thu (`ActualCost`), số tiền đã chi trả NCC (`PaidAmount`) và trạng thái công nợ (`Unpaid` / `Partial` / `Paid`).
+- **Thanh toán công nợ NCC (`SupplierPayments`):** Kế toán lập phiếu chi trả cọc hoặc tất toán cho NCC theo từng `DepartureService` (tự động ghi nhận dòng tiền ra vào sổ quỹ `FinancialLedgers`).
+- **Công thức Lợi nhuận gộp đoàn:** $\text{Gross Profit} = \text{Doanh thu thực nhận từ Booking (không gồm tiền hoàn)} - \text{Tổng ActualCost dịch vụ NCC} - \text{Tổng chi phí phát sinh đã duyệt}$.

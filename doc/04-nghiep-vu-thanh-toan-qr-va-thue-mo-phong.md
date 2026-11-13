@@ -23,14 +23,16 @@ Một Booking có thể thanh toán 1 lần (100%) hoặc chia 2 đợt:
 
 ### 2.1. Luồng nghiệp vụ chi tiết
 1. **Bước 1 — Khởi tạo phiên thanh toán QR (`Create QR Payment Intent`):**
-   - Khách hoặc Sales chọn số tiền cần thanh toán (Tiền cọc hoặc Thanh toán toàn bộ / Phần còn lại) và phương thức `QR_BANK_TRANSFER`.
-   - Hệ thống tạo một bản ghi `PaymentTransaction` với:
+   - Khách hoặc Sales chọn số tiền cần thanh toán (Tiền cọc hoặc Thanh toán toàn bộ / Phần còn lại) và phương thức `QR_SIMULATED` (hoặc `BANK_TRANSFER_MANUAL` / `CASH` tại quầy khi `SALES`/`ACCOUNTANT` thu hộ).
+   - Hệ thống lấy thông tin tài khoản thụ hưởng từ `CompanyBankAccounts` (mặc định tài khoản đang kích hoạt trong `SystemSettings`) và tạo bản ghi `PaymentTransactions` với:
      - `TransactionCode`: Mã giao dịch duy nhất (VD: `PAY-20261113-0001`).
      - `TransferContent` (Nội dung chuyển khoản chuẩn hóa): VD `TOUR BK2026111301`.
-     - `Amount`: Số tiền chính xác cần thanh toán.
+     - `ExpectedAmount`: Số tiền cần thu của phiên thanh toán.
+     - `ActualReceivedAmount`: Số tiền thực nhận (ban đầu `0`, cập nhật khi callback simulator hoặc khi Kế toán đối soát).
      - `ExpiresAt`: Thời hạn mã QR (VD: 15 phút).
-     - `Status`: `Pending`.
-   - Hệ thống sinh **chuỗi/ảnh QR mô phỏng** (theo chuẩn VietQR payload hoặc SVG/PNG Base64 kèm thông tin: Tên ngân hàng giả lập, Số tài khoản công ty, Tên chủ tài khoản, Số tiền, Nội dung chuyển khoản).
+     - `Status`: `Pending` (`Pending` | `Succeeded` | `Failed` | `NeedReconciliation` | `Expired` | `Cancelled`).
+     - `ReconciliationStatus`: `Unreconciled` | `Matched` | `Discrepancy` | `Resolved`.
+   - Hệ thống sinh **chuỗi/ảnh QR mô phỏng** (theo chuẩn VietQR payload kèm thông tin: Tên ngân hàng, BIN, Số tài khoản công ty, Tên chủ tài khoản, Số tiền, Nội dung chuyển khoản).
 
 2. **Bước 2 — Hiển thị & Theo dõi trạng thái (Realtime/Polling):**
    - Giao diện hiển thị mã QR, đồng hồ đếm ngược và nút kiểm tra trạng thái.
@@ -38,28 +40,32 @@ Một Booking có thể thanh toán 1 lần (100%) hoặc chia 2 đợt:
 
 3. **Bước 3 — Mô phỏng Quét mã & Xác nhận từ Ngân hàng (Simulator):**
    - Do chưa kết nối ngân hàng thật, hệ thống cung cấp **Payment Simulator Panel / API giả lập** (chỉ bật ở môi trường Dev/Staging hoặc quyền Admin/Test):
-     - **Kịch bản 1 — Thanh toán thành công (Happy Path):** Giả lập ngân hàng gửi Webhook callback về API với `TransactionCode`, `PaidAmount == Amount`, chữ ký hợp lệ (`MockSignature`).
+     - **Kịch bản 1 — Thanh toán thành công (Happy Path):** Giả lập ngân hàng gửi Webhook callback về API với `TransactionCode`, `PaidAmount == ExpectedAmount`, chữ ký hợp lệ (`MockSignature`).
      - **Kịch bản 2 — Thanh toán thất bại / Hủy:** Giả lập khách hủy giao dịch hoặc lỗi ngân hàng $\rightarrow$ `Status = Failed`.
-     - **Kịch bản 3 — Chuyển sai số tiền (Partial / Overpaid):** Giả lập khách chuyển thiếu hoặc thừa tiền $\rightarrow$ Hệ thống đánh dấu `NeedReconciliation` (Cần kế toán đối soát) và cảnh báo Sales/Kế toán thay vì tự động xác nhận sai.
+     - **Kịch bản 3 — Chuyển sai số tiền (Partial / Overpaid):** Giả lập khách chuyển thiếu hoặc thừa tiền $\rightarrow$ Hệ thống ghi nhận `ActualReceivedAmount`, chuyển `Status = NeedReconciliation`, `ReconciliationStatus = Discrepancy` và cảnh báo Sales/Kế toán thay vì tự động gạch nợ sai.
      - **Kịch bản 4 — Hết hạn QR (Timeout):** Quá `ExpiresAt` chưa có callback $\rightarrow$ Giao dịch chuyển `Expired`, yêu cầu tạo mã QR mới.
 
-4. **Bước 4 — Xử lý Idempotency & Cập nhật Booking:**
-   - Webhook nhận callback phải kiểm tra **Idempotency** (nếu cùng một `BankTransactionId` gửi lại nhiều lần thì chỉ cộng tiền đúng 1 lần).
-   - Cập nhật `PaidAmount` trên Booking, chuyển trạng thái Booking (`DepositPaid` hoặc `Confirmed`), chuyển chỗ từ `Held` sang `Booked`, và tạo tự động **Phiếu thu (Receipt)**.
+4. **Bước 4 — Xử lý Idempotency, Chống trùng BankRef & Cập nhật Booking:**
+   - Webhook nhận callback phải kiểm tra **IdempotencyKey** (`UNIQUE` filtered index) để chỉ xử lý tối đa 1 lần.
+   - Ràng buộc **chống đối soát trùng mã sao kê ngân hàng**: cặp `(BankCode, BankRef)` phải là duy nhất khi `BankRef IS NOT NULL`, tránh 1 giao dịch ngân hàng bị gán cho 2 đơn hàng khác nhau.
+   - Khi giao dịch thành công: cập nhật `PaidAmount` trên `Bookings`, chuyển trạng thái Booking (`DepositPaid` hoặc `Confirmed`), chuyển chỗ từ `HeldSlots` sang `BookedSlots`, và tự động ghi bút toán thu vào sổ quỹ `FinancialLedgers` (`Direction = In`, `Category = CustomerPayment`).
 
-### 2.2. Đối soát thủ công (Manual Reconciliation)
-- Trường hợp khách chuyển khoản ngoài luồng hoặc chuyển sai nội dung/số tiền, `ACCOUNTANT` có chức năng **Xác nhận thanh toán thủ công** (đính kèm ảnh chụp biên lai/mã tham chiếu ngân hàng) để gạch nợ cho Booking.
+### 2.2. Đối soát kế toán nội bộ (Manual Reconciliation)
+- Trường hợp khách chuyển khoản ngoài luồng, chuyển sai số tiền (`NeedReconciliation`), hoặc nộp tiền mặt tại quầy: `ACCOUNTANT` sử dụng màn hình **Đối soát thu hộ / sao kê**:
+  - Nhập `BankCode`, `BankRef` (số bút toán sao kê ngân hàng), `ActualReceivedAmount`, thời điểm nhận tiền, ảnh chứng từ biên lai (`EvidenceUrl`) và ghi chú đối soát.
+  - Nếu khách chuyển thiếu (VD: thiếu 200.000đ): Kế toán có thể **xác nhận ghi nhận đúng số tiền thực nhận (`ActualReceivedAmount`)**, chuyển `ReconciliationStatus = Resolved`; `Bookings.PaidAmount` cộng đúng số thực nhận và phần còn thiếu vẫn nằm ở `RemainingAmount` để khách thanh toán tiếp (hoặc chuyển `Confirmed` nếu đủ điều kiện cọc/thanh toán).
+  - Nếu khách chuyển thừa: ghi nhận số thực nhận, tạo ghi chú/đề xuất hoàn trả phần dư cho khách.
 
 ---
 
 ## 3. Nghiệp vụ Hoàn tiền (Refund)
 
-Khi Booking bị hủy hợp lệ hoặc đoàn bị hủy bởi công ty:
+Khi Booking được `SALES` / `OPERATOR` / `ADMIN` duyệt hủy hợp lệ (đã chốt mức phí phạt theo `CancellationPolicySnapshotJson`) hoặc đoàn bị hủy bởi công ty:
 1. Hệ thống tính toán tự động:
-   - `PenaltyAmount` = `TotalAmount * CancellationFeePercent` (theo chính sách hủy tại ngày gửi yêu cầu).
+   - `PenaltyAmount` = `TotalAmount * CancellationFeePercent` (hoặc `0` nếu công ty hủy đoàn).
    - `RefundableAmount = Max(0, PaidAmount - PenaltyAmount)`.
-2. Tạo yêu cầu hoàn tiền (`RefundRequest`) với trạng thái `PendingApproval`.
-3. `ACCOUNTANT` / `ADMIN` kiểm tra, phê duyệt và thực hiện chi trả (nhập mã tham chiếu chuyển khoản hoàn trả), tạo **Phiếu chi**, chuyển trạng thái Booking sang `Refunded`.
+2. Nếu `RefundableAmount > 0`, hệ thống tạo yêu cầu hoàn tiền (`RefundRequests`) với trạng thái `PendingApproval`.
+3. `ACCOUNTANT` / `ADMIN` kiểm tra, phê duyệt và thực hiện chi trả (nhập mã tham chiếu chuyển khoản hoàn trả `TransferRef`), tự động ghi sổ quỹ `FinancialLedgers` (`Direction = Out`, `Category = CustomerRefund`), và chuyển trạng thái Booking sang `Refunded`.
 
 ---
 
