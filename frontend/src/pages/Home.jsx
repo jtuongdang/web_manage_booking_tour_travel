@@ -1,24 +1,53 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Compass, Copy, Gift, Headphones, Info, Percent, QrCode, ShieldCheck, Sparkles, Ticket } from 'lucide-react';
 import SearchBar from '../components/SearchBar';
 import TourCard from '../components/TourCard';
-import { destinations, HERO_IMAGE, tours } from '../data/tours';
-
-const COUPONS = [
-  { code: 'WELCOME10', icon: Compass, color: '#0194f3', title: 'Giảm 10% tối đa 500K cho đơn tour đầu tiên', sub: 'Áp dụng cho khách hàng mới trên website' },
-  { code: 'GROUP300', icon: Ticket, color: '#0b63ce', title: 'Giảm ngay 300.000 ₫ cho nhóm từ 4 khách', sub: 'Áp dụng cho toàn bộ tour trong nước & quốc tế' },
-  { code: 'COC30', icon: Percent, color: '#ff5e1f', title: 'Đặt cọc 30% giữ chỗ ngay – Không phí ẩn', sub: 'Thanh toán qua VietQR, xác nhận tức thì' },
-];
-
-const PROMO_BANNERS = [
-  { code: 'WELCOME10', title: 'Nâng tầm hành trình cùng VietTour', sub: 'Giảm 10% (tối đa 500K) tour biển đảo', image: '/images/phu-quoc.jpg', bg: 'linear-gradient(120deg, #0b63ce, #0194f3)' },
-  { code: 'GROUP300', title: 'Nghỉ dưỡng 5 sao & Du thuyền', sub: 'Phú Quốc · Đà Nẵng · Hạ Long · Sapa', image: '/images/luxury-resort.jpg', bg: 'linear-gradient(120deg, #1c2430, #374151)' },
-  { code: 'COC30', title: 'Vi vu Nhật Bản & Hàn Quốc', sub: 'Bao visa · Giá trọn gói minh bạch', image: '/images/han-quoc.jpg', bg: 'linear-gradient(120deg, #ff5e1f, #f59e0b)' },
-];
+import { destinations, HERO_IMAGE } from '../data/tours';
+import { promotionsApi, toursApi } from '../api/toursApi';
+import { vnd } from '../utils/format';
 
 export default function Home() {
   const [copiedCode, setCopiedCode] = useState('');
+  const [tours, setTours] = useState([]);
+  const [promotions, setPromotions] = useState([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    toursApi.list({ pageIndex: 1, pageSize: 100 }).then((result) => {
+      if (active) setTours(result.items);
+    }).catch((requestError) => {
+      if (active) setError(`Tour: ${requestError.message || 'không thể tải dữ liệu.'}`);
+    });
+    promotionsApi.list().then((result) => {
+      if (active) setPromotions(result);
+    }).catch((requestError) => {
+      if (active) setError((message) => `${message ? `${message} ` : ''}Ưu đãi: ${requestError.message || 'không thể tải dữ liệu.'}`);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const coupons = promotions.slice(0, 3).map((promotion, index) => {
+    const Icon = [Compass, Ticket, Percent][index];
+    const amount = promotion.discountType === 'Percent'
+      ? `Giảm ${promotion.discountValue}%${promotion.maxDiscountAmount ? ` tối đa ${vnd(promotion.maxDiscountAmount)}` : ''}`
+      : `Giảm ${vnd(promotion.discountValue)}`;
+    return {
+      code: promotion.code,
+      icon: Icon,
+      color: ['#0194f3', '#0b63ce', '#ff5e1f'][index],
+      title: `${amount} ${promotion.minPax > 1 ? `cho nhóm từ ${promotion.minPax} khách` : ''}`,
+      sub: promotion.description || `Áp dụng đến ${new Date(promotion.validTo).toLocaleDateString('vi-VN')}`,
+    };
+  });
+  const promoBanners = promotions.slice(0, 3).map((promotion, index) => ({
+    code: promotion.code,
+    title: promotion.name,
+    sub: promotion.description || `Áp dụng đến ${new Date(promotion.validTo).toLocaleDateString('vi-VN')}`,
+    image: ['/images/phu-quoc.jpg', '/images/luxury-resort.jpg', '/images/han-quoc.jpg'][index],
+    bg: ['linear-gradient(120deg, #0b63ce, #0194f3)', 'linear-gradient(120deg, #1c2430, #374151)', 'linear-gradient(120deg, #ff5e1f, #f59e0b)'][index],
+  }));
 
   const copyCode = async (code) => {
     await navigator.clipboard?.writeText(code);
@@ -47,7 +76,8 @@ export default function Home() {
           <Link to="/tours">Xem tất cả →</Link>
         </div>
         <div className="coupon-grid">
-          {COUPONS.map((c) => {
+          {error && <p className="error-text" role="alert">Không tải được dữ liệu API: {error}</p>}
+          {coupons.map((c) => {
             const Icon = c.icon;
             return (
               <div key={c.code} className="coupon-card">
@@ -68,12 +98,13 @@ export default function Home() {
               </div>
             );
           })}
+          {!coupons.length && <p className="muted small">Hiện chưa có ưu đãi đang áp dụng.</p>}
         </div>
       </section>
 
       <section className="container section">
         <div className="promo-grid">
-          {PROMO_BANNERS.map((p) => (
+          {promoBanners.map((p) => (
             <Link key={p.title} to="/tours" className="promo-card" style={{ background: p.bg }}>
               <img className="promo-img" src={p.image} alt="" loading="lazy" />
               <div className="promo-scrim" />
@@ -90,6 +121,7 @@ export default function Home() {
               </div>
             </Link>
           ))}
+          {!promoBanners.length && <p className="muted small">Chưa có chiến dịch khuyến mãi đang chạy.</p>}
         </div>
       </section>
 
@@ -100,6 +132,7 @@ export default function Home() {
         </div>
         <div className="tour-grid">
           {tours.slice(0, 4).map((t) => <TourCard key={t.id} tour={t} />)}
+          {!tours.length && !error && <p className="muted">Đang tải tour từ hệ thống…</p>}
         </div>
       </section>
 
